@@ -33,6 +33,21 @@ jobs:
             ! -name ".git" ! -name "gradle" -exec rm -rf {} +
           cp -R source/NartoDrama build-project/NartoDrama
 
+      - name: Use published CloudStream API compile stubs
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          path = "build-project/build.gradle.kts"
+          with open(path, "r", encoding="utf-8") as file:
+              content = file.read()
+          content = content.replace(
+              '        implementation("com.github.recloudstream.cloudstream:library:-SNAPSHOT")',
+              '        val apk by configurations\n        apk("com.lagradost:cloudstream3:pre-release")'
+          )
+          with open(path, "w", encoding="utf-8") as file:
+              file.write(content)
+          PY
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
