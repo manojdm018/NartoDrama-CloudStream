@@ -42,7 +42,7 @@ jobs:
               content = file.read()
           content = content.replace(
               '        implementation("com.github.recloudstream.cloudstream:library:-SNAPSHOT")',
-              '        implementation("com.lagradost:cloudstream3:pre-release")'
+              '        val cloudstream by configurations\n        cloudstream("com.lagradost:cloudstream3:pre-release")'
           )
           with open(path, "w", encoding="utf-8") as file:
               file.write(content)
