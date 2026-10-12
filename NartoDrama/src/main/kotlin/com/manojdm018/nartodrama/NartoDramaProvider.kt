@@ -10,7 +10,7 @@ import java.net.URLEncoder
 import java.util.Locale
 
 class NartoDramaProvider : MainAPI() {
-    override var mainUrl = "https://edge.narto-drama.com"
+    override var mainUrl = "https://narto.in"
     override var name = "Narto Drama"
     override var lang = "en"
     override val hasMainPage = true
