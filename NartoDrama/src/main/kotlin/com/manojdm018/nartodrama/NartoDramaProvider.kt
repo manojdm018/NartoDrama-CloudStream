@@ -487,6 +487,39 @@ class NartoDramaProvider : MainAPI() {
         val html = document.outerHtml()
         var found = false
 
+        val emittedMediaUrls = linkedSetOf<String>()
+        val expandedHlsMasters = linkedSetOf<String>()
+
+        suspend fun emitMediaLink(mediaUrl: String, label: String, type: ExtractorLinkType): Boolean {
+            if (mediaUrl.isBlank() || mediaUrl in emittedMediaUrls || mediaUrl in expandedHlsMasters) return false
+
+            if (type == ExtractorLinkType.M3U8) {
+                expandedHlsMasters.add(mediaUrl)
+                val variants = parseHlsVariants(mediaUrl, data)
+                if (variants.isNotEmpty()) {
+                    for (variant in variants) {
+                        if (!emittedMediaUrls.add(variant.url)) continue
+                        callback(
+                            newExtractorLink(name, "$label • ${variant.label}", variant.url, ExtractorLinkType.M3U8) {
+                                referer = data
+                                quality = variant.quality
+                            }
+                        )
+                    }
+                    return true
+                }
+            }
+
+            if (!emittedMediaUrls.add(mediaUrl)) return false
+            callback(
+                newExtractorLink(name, label, mediaUrl, type) {
+                    referer = data
+                    quality = Qualities.Unknown.value
+                }
+            )
+            return true
+        }
+
         // First collect every publicly exposed HTML5 media URL and iframe server.
         // These become independent links so CloudStream can try another if one fails.
         for (node in document.select("video[src], video source[src], source[src]")) {
@@ -499,13 +532,9 @@ class NartoDramaProvider : MainAPI() {
                     ExtractorLinkType.DASH
                 else -> ExtractorLinkType.VIDEO
             }
-            callback(
-                newExtractorLink(name, "$name HTML5", mediaUrl, type) {
-                    referer = data
-                    quality = Qualities.Unknown.value
-                }
-            )
-            found = true
+            if (emitMediaLink(mediaUrl, "$name HTML5", type)) {
+                found = true
+            }
         }
 
         for (frame in document.select("iframe[src]")) {
@@ -595,13 +624,9 @@ class NartoDramaProvider : MainAPI() {
                 mediaUrl.contains(".mpd", true) -> ExtractorLinkType.DASH
                 else -> ExtractorLinkType.VIDEO
             }
-            callback(
-                newExtractorLink(name, label, mediaUrl, type) {
-                    referer = data
-                    quality = Qualities.Unknown.value
+            if (emitMediaLink(mediaUrl, label, type)) {
+                    found = true
                 }
-            )
-            found = true
         }
 
         // Last fallback: some pages embed episode sources in their episodeItemsRaw JSON.
@@ -637,13 +662,9 @@ class NartoDramaProvider : MainAPI() {
                     mediaUrl.contains(".mpd", true) -> ExtractorLinkType.DASH
                     else -> ExtractorLinkType.VIDEO
                 }
-                callback(
-                    newExtractorLink(name, label, mediaUrl, type) {
-                        referer = data
-                        quality = Qualities.Unknown.value
-                    }
-                )
-                found = true
+                if (emitMediaLink(mediaUrl, label, type)) {
+                    found = true
+                }
             }
 
             currentEpisode?.optString("subtitle_url")?.takeIf { it.isNotBlank() }?.let { raw ->
@@ -664,6 +685,93 @@ class NartoDramaProvider : MainAPI() {
         }
 
         return found
+    }
+
+
+    private data class HlsVariant(
+        val url: String,
+        val quality: Int,
+        val label: String
+    )
+
+    /**
+     * Resolve real variant URLs from an HLS master playlist.
+     * If the source is a media playlist rather than a master playlist, the caller
+     * falls back to offering the original stream URL.
+     */
+    private suspend fun parseHlsVariants(masterUrl: String, refererUrl: String): List<HlsVariant> {
+        val playlist = runCatching {
+            app.get(
+                masterUrl,
+                headers = mapOf(
+                    "Referer" to refererUrl,
+                    "Accept" to "application/vnd.apple.mpegurl, application/x-mpegURL, */*"
+                )
+            ).text
+        }.getOrNull() ?: return emptyList()
+
+        if (!playlist.lineSequence().any { it.trim() == "#EXTM3U" }) return emptyList()
+
+        fun standardQuality(rawValue: Int): Int = when {
+            rawValue >= 2000 -> Qualities.P2160.value
+            rawValue >= 1300 -> Qualities.P1440.value
+            rawValue >= 1000 -> Qualities.P1080.value
+            rawValue >= 650 -> Qualities.P720.value
+            rawValue >= 430 -> Qualities.P480.value
+            rawValue >= 300 -> Qualities.P360.value
+            rawValue >= 200 -> Qualities.P240.value
+            else -> Qualities.Unknown.value
+        }
+
+        fun qualityLabel(value: Int, fallbackName: String, index: Int): String = when (value) {
+            Qualities.P240.value -> "240p"
+            Qualities.P360.value -> "360p"
+            Qualities.P480.value -> "480p"
+            Qualities.P720.value -> "720p"
+            Qualities.P1080.value -> "1080p"
+            Qualities.P1440.value -> "1440p"
+            Qualities.P2160.value -> "2160p"
+            else -> fallbackName.takeIf { it.isNotBlank() } ?: "Variant ${index + 1}"
+        }
+
+        val variants = mutableListOf<HlsVariant>()
+        var streamInfo: String? = null
+        for (rawLine in playlist.lineSequence()) {
+            val line = rawLine.trim()
+            if (line.startsWith("#EXT-X-STREAM-INF:", ignoreCase = true)) {
+                streamInfo = line.substringAfter(":")
+                continue
+            }
+
+            val currentInfo = streamInfo ?: continue
+            if (line.isBlank() || line.startsWith("#")) continue
+
+            val resolution = Regex("""RESOLUTION=(\d+)x(\d+)""", RegexOption.IGNORE_CASE)
+                .find(currentInfo)
+            val namedQuality = Regex("""(?:^|[^0-9])(2160|1440|1080|720|480|360|240)\s*p?(?:[^0-9]|$)""", RegexOption.IGNORE_CASE)
+                .find(currentInfo)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+            val resolutionQuality = resolution?.let {
+                val width = it.groupValues[1].toIntOrNull() ?: 0
+                val height = it.groupValues[2].toIntOrNull() ?: 0
+                // The short edge maps portrait encodes such as 720x1280 to 720p.
+                standardQuality(minOf(width, height))
+            }?.takeIf { it != Qualities.Unknown.value }
+            val namedQualityValue = namedQuality?.let { standardQuality(it) }
+                ?.takeIf { it != Qualities.Unknown.value }
+            val quality = resolutionQuality ?: namedQualityValue ?: Qualities.Unknown.value
+            val rawName = Regex("""NAME="([^"]+)"""").find(currentInfo)?.groupValues?.getOrNull(1).orEmpty()
+            val label = qualityLabel(quality, rawName, variants.size)
+
+            val resolved = runCatching { URI(masterUrl).resolve(URI(line)).toString() }.getOrNull()
+            if (!resolved.isNullOrBlank() && resolved.startsWith("http", ignoreCase = true) &&
+                variants.none { it.url == resolved }) {
+                variants.add(HlsVariant(resolved, quality, label))
+            }
+            streamInfo = null
+        }
+
+        return variants.sortedBy { if (it.quality == Qualities.Unknown.value) Int.MAX_VALUE else it.quality }
     }
 
     private fun extractRsContext(url: String, document: Document, html: String): String? {
