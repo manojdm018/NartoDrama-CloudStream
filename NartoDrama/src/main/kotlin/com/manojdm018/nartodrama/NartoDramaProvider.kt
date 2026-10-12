@@ -2,7 +2,11 @@ package com.manojdm018.nartodrama
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
@@ -19,12 +23,46 @@ class NartoDramaProvider : MainAPI() {
     private val episodePath = Regex("""/detail/watch/([^/?]+)/?(\d+)?""")
     private val streamApiBase = "https://edge.narto-drama.com"
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val document = app.get("$mainUrl/?lang=en-US&page=$page").document
-        val results = parseCards(document)
-        return newHomePageResponse(
-            listOf(HomePageList("Popular Dramas", results)),
-            hasNext = results.isNotEmpty()
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? = coroutineScope {
+        // Language links use Narto Drama's own locale filters; genre links use its public genre pages.
+        // No catalogue is copied or stored in this extension.
+        val sections = listOf(
+            "English Subtitles" to "/genre/drama?lang=en-US&page=$page",
+            "Bahasa Indonesia" to "/genre/drama?lang=id-ID&page=$page",
+            "Filipino Subtitles" to "/genre/drama?lang=tl-PH&page=$page",
+            "Hindi Subtitles" to "/genre/drama?lang=hi-IN&page=$page",
+            "Tamil Subtitles" to "/genre/drama?lang=ta-IN&page=$page",
+            "Telugu Subtitles" to "/genre/drama?lang=te-IN&page=$page",
+            "Romance" to "/genre/romance?lang=en-US&page=$page",
+            "Fantasy" to "/genre/fantasy?lang=en-US&page=$page",
+            "Revenge" to "/genre/revenge?lang=en-US&page=$page",
+            "Action" to "/genre/action?lang=en-US&page=$page",
+            "Comedy" to "/genre/comedy?lang=en-US&page=$page",
+            "Thriller" to "/genre/thriller?lang=en-US&page=$page",
+            "Horror" to "/genre/horror?lang=en-US&page=$page"
+        )
+
+        val fetchedSections = sections.map { (title, path) ->
+            async {
+                val results = runCatching {
+                    parseCards(
+                        app.get(
+                            "$mainUrl$path",
+                            headers = mapOf("Referer" to "$mainUrl/")
+                        ).document
+                    )
+                }.getOrDefault(emptyList())
+                title to results
+            }
+        }.awaitAll()
+
+        val lists = fetchedSections
+            .filter { it.second.isNotEmpty() }
+            .map { (title, results) -> HomePageList(title, results) }
+
+        newHomePageResponse(
+            lists,
+            hasNext = fetchedSections.any { it.second.isNotEmpty() }
         )
     }
 
@@ -180,9 +218,9 @@ class NartoDramaProvider : MainAPI() {
             }
         }
 
-        // Resolve the site's public refresh-source endpoint using context supplied by
-        // the page when available. Never invent tokens or bypass access checks.
-        val rsCtx = extractRsContext(data, document, html)
+        // Try the site's supported refresh-source routes in order. Some episodes need a
+        // forced edge refresh while others respond to the uncached or origin route.
+        // Only use context values supplied by the page; never fabricate tokens or bypass access checks.
         val route = episodePath.find(data) ?: return found
         val slug = route.groupValues.getOrNull(1).orEmpty()
         val episodeNumber = route.groupValues.getOrNull(2)?.toIntOrNull() ?: return found
@@ -192,29 +230,46 @@ class NartoDramaProvider : MainAPI() {
             .find(data)?.groupValues?.getOrNull(1)
             ?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }
             ?.takeIf { it.isNotBlank() } ?: "en-US"
-        val apiQuery = buildString {
-            append("force=1&force_edge=1&lang=")
-            append(URLEncoder.encode(lang, "UTF-8"))
-            if (!rsCtx.isNullOrBlank()) {
-                append("&rs_ctx=")
-                append(URLEncoder.encode(rsCtx, "UTF-8"))
+        val encodedLang = URLEncoder.encode(lang, "UTF-8")
+        val rsCtx = extractRsContext(data, document, html)
+        val contextQuery = if (!rsCtx.isNullOrBlank()) {
+            "&rs_ctx=${URLEncoder.encode(rsCtx, "UTF-8")}"
+        } else {
+            ""
+        }
+        val refreshUrls = listOf(
+            "$streamApiBase/e/rs/detail/watch/$slug/$episodeNumber/refresh-source?force=1&force_edge=1&lang=$encodedLang$contextQuery",
+            "$streamApiBase/e/rs/detail/watch/$slug/$episodeNumber/refresh-source?force=1&no_cache=1&lang=$encodedLang$contextQuery",
+            "$streamApiBase/e/rs/detail/watch/$slug/$episodeNumber/refresh-source?force=1&lang=$encodedLang$contextQuery",
+            "$mainUrl/detail/watch/$slug/$episodeNumber/refresh-source?force=1&force_edge=1&lang=$encodedLang$contextQuery"
+        )
+        val requestHeaders = mapOf(
+            "Referer" to data,
+            "Origin" to mainUrl,
+            "Accept" to "application/json",
+            "X-Requested-With" to "XMLHttpRequest"
+        )
+
+        var payload: JSONObject? = null
+        for (apiUrl in refreshUrls) {
+            val responseText = runCatching {
+                app.get(apiUrl, headers = requestHeaders).text
+            }.getOrNull() ?: continue
+            val json = runCatching { JSONObject(responseText) }.getOrNull() ?: continue
+            val candidatePayload = json.optJSONObject("data")?.let { nested ->
+                nested.optJSONObject("data") ?: nested
+            } ?: json
+
+            if (payload == null) payload = candidatePayload
+            val direct = candidatePayload.optString("direct_play_url")
+            val play = candidatePayload.optString("play_url")
+            if (direct.startsWith("http", true) || play.startsWith("http", true)) {
+                payload = candidatePayload
+                break
             }
         }
-        val apiUrl = "$streamApiBase/e/rs/detail/watch/$slug/$episodeNumber/refresh-source?$apiQuery"
-        val apiResponse = runCatching {
-            app.get(apiUrl, headers = mapOf(
-                "Referer" to data,
-                "Origin" to mainUrl,
-                "Accept" to "application/json",
-                "X-Requested-With" to "XMLHttpRequest"
-            ))
-        }.getOrNull() ?: return found
 
-        val json = runCatching { JSONObject(apiResponse.text) }.getOrNull() ?: return found
-        val payload = json.optJSONObject("data") ?: json
-
-        val subtitles = payload.optJSONArray("multi_subtitles")
-        if (subtitles != null) {
+        payload?.optJSONArray("multi_subtitles")?.let { subtitles ->
             for (i in 0 until subtitles.length()) {
                 val subtitle = subtitles.optJSONObject(i) ?: continue
                 val rawUrl = subtitle.optString("subtitle_url").takeIf { it.isNotBlank() } ?: continue
@@ -228,17 +283,17 @@ class NartoDramaProvider : MainAPI() {
             }
         }
 
-        // Do not discard the fallback when a direct link is present. Both are
-        // valid candidates and CloudStream can try a different link if playback fails.
         val candidates = linkedMapOf<String, String>()
-        payload.optString("direct_play_url").takeIf { it.startsWith("http") }
+        payload?.optString("direct_play_url")?.takeIf { it.startsWith("http", true) }
             ?.let { candidates["Narto Drama Direct"] = it }
-        payload.optString("play_url").takeIf { it.startsWith("http") }
+        payload?.optString("play_url")?.takeIf { it.startsWith("http", true) }
             ?.let { candidates["Narto Drama Fallback"] = it }
 
         for ((label, mediaUrl) in candidates) {
             val type = when {
-                mediaUrl.contains(".m3u8", true) -> ExtractorLinkType.M3U8
+                mediaUrl.contains(".m3u8", true) ||
+                    (payload?.optBoolean("direct_play_is_hls", false) == true && label.contains("Direct")) ->
+                    ExtractorLinkType.M3U8
                 mediaUrl.contains(".mpd", true) -> ExtractorLinkType.DASH
                 else -> ExtractorLinkType.VIDEO
             }
@@ -249,6 +304,65 @@ class NartoDramaProvider : MainAPI() {
                 }
             )
             found = true
+        }
+
+        // Last fallback: some pages embed episode sources in their episodeItemsRaw JSON.
+        // Read only the current episode's publicly supplied URLs.
+        if (!found) {
+            val rawEpisodes = Regex(
+                """(?:const|let|var)\\s+episodeItemsRaw\\s*=\\s*(\\[[\\s\\S]*?\\]);""",
+                RegexOption.IGNORE_CASE
+            ).find(html)?.groupValues?.getOrNull(1)
+
+            val episodeItems = rawEpisodes?.let {
+                runCatching { JSONArray(it) }.getOrNull()
+            }
+            val currentEpisode = episodeItems?.let { items ->
+                (0 until items.length())
+                    .mapNotNull { items.optJSONObject(it) }
+                    .firstOrNull {
+                        it.optInt("number", it.optInt("route_episode_number", -1)) == episodeNumber
+                    }
+            }
+
+            val htmlCandidates = linkedMapOf<String, String>()
+            currentEpisode?.optString("direct_play_url")?.takeIf { it.startsWith("http", true) }
+                ?.let { htmlCandidates["Narto Drama Direct"] = it }
+            currentEpisode?.optString("play_url")?.takeIf { it.startsWith("http", true) }
+                ?.let { htmlCandidates["Narto Drama Page Source"] = it }
+
+            for ((label, mediaUrl) in htmlCandidates) {
+                val type = when {
+                    mediaUrl.contains(".m3u8", true) ||
+                        (currentEpisode?.optBoolean("direct_play_is_hls", false) == true && label.contains("Direct")) ->
+                        ExtractorLinkType.M3U8
+                    mediaUrl.contains(".mpd", true) -> ExtractorLinkType.DASH
+                    else -> ExtractorLinkType.VIDEO
+                }
+                callback(
+                    newExtractorLink(name, label, mediaUrl, type) {
+                        referer = data
+                        quality = Qualities.Unknown.value
+                    }
+                )
+                found = true
+            }
+
+            currentEpisode?.optString("subtitle_url")?.takeIf { it.isNotBlank() }?.let { raw ->
+                val subtitleUrl = if (raw.startsWith("http", true)) raw
+                    else "https://stream.narto-drama.com/${raw.trimStart('/')}"
+                subtitleCallback(SubtitleFile("Subtitle", subtitleUrl))
+            }
+            currentEpisode?.optJSONArray("multi_subtitles")?.let { subtitles ->
+                for (i in 0 until subtitles.length()) {
+                    val subtitle = subtitles.optJSONObject(i) ?: continue
+                    val rawUrl = subtitle.optString("subtitle_url").takeIf { it.isNotBlank() } ?: continue
+                    val subtitleUrl = if (rawUrl.startsWith("http", true)) rawUrl
+                        else "https://stream.narto-drama.com/${rawUrl.trimStart('/')}"
+                    val label = subtitle.optString("label").takeIf { it.isNotBlank() } ?: "Subtitle"
+                    subtitleCallback(SubtitleFile(label, subtitleUrl))
+                }
+            }
         }
 
         return found
