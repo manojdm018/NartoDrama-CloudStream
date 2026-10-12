@@ -93,7 +93,7 @@ class NartoDramaProvider : MainAPI() {
         "ta-IN" to "Tamil", "te-IN" to "Telugu", "bn-BD" to "Bengali", "pl-PL" to "Polish"
     )
     private val browsePages =
-        providerChoices.map { ("$mainUrl/?csbrowse=provider:" + it.first) to it.second } +
+        providerChoices.map { ("$mainUrl/?csbrowse=provider:" + it.first) to (it.second + " Dramas") } +
         listOf(
             ("$mainUrl/?csbrowse=page:featured") to "Featured",
             ("$mainUrl/?csbrowse=page:movies") to "Movies & Series",
@@ -215,18 +215,19 @@ class NartoDramaProvider : MainAPI() {
             }
         }
         val sections = json?.optJSONArray("sections") ?: return emptyList()
-        val rows = mutableListOf<HomePageList>()
+        val allResults = mutableListOf<SearchResponse>()
+        val seenUrls = HashSet<String>()
         for (i in 0 until sections.length()) {
             val sec = sections.optJSONObject(i) ?: continue
-            val title = sec.optString("tab_label")
-                .ifBlank { sec.optString("name") }
-                .ifBlank { sec.optString("tab_key") }
-                .ifBlank { "Popular" }
             val items = sec.optJSONArray("items") ?: continue
-            val results = parseApiItems(items)
-            if (results.isNotEmpty()) rows.add(HomePageList(title + " • " + providerLabel, results))
+            for (result in parseApiItems(items)) {
+                if (seenUrls.add(result.url)) allResults.add(result)
+            }
         }
-        return rows
+
+        // One clearly labelled home row per source app; merge that app's upstream tabs.
+        return if (allResults.isEmpty()) emptyList()
+        else listOf(HomePageList(providerLabel + " Dramas", allResults))
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
