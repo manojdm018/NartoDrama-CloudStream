@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -111,6 +111,35 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew NartoDrama:make makePluginsJson
+
+      - name: Publish CloudStream repository branch
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p publish
+          cp build-project/NartoDrama/build/*.cs3 publish/
+          cp build-project/build/plugins.json publish/
+          cat > publish/repo.json <<EOF
+          {
+            "name": "Narto Drama",
+            "description": "CloudStream extension repository for Narto Drama",
+            "manifestVersion": 1,
+            "pluginLists": [
+              "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/builds/plugins.json"
+            ]
+          }
+          EOF
+          cd publish
+          git init
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add .
+          git commit -m "Build ${GITHUB_SHA}"
+          git branch -M builds
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
+          git -c "http.extraheader=AUTHORIZATION: basic ${auth}" push --force origin builds
 
       - name: Upload CloudStream plugin
         uses: actions/upload-artifact@v4
