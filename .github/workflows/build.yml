@@ -42,6 +42,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-30 build-tools;30.0.3
 
       - name: Set up Java 11 for the template build
         uses: actions/setup-java@v4
