@@ -59,7 +59,7 @@ class NartoDramaProvider : MainAPI() {
             lists,
             hasNext = fetchedSections.isNotEmpty()
         )
-    }}
+    }
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
