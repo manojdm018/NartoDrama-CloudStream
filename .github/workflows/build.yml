@@ -32,14 +32,22 @@ jobs:
           rm -rf build-project/ExampleProvider
           cp -R source/NartoDrama build-project/NartoDrama
 
-      - name: Set up Java 11
+      # Current Android command-line tools require Java 17, even though
+      # the pinned plugin template compiles most reliably on Java 11.
+      - name: Set up Java 17 for Android SDK tools
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Java 11 for the template build
         uses: actions/setup-java@v4
         with:
           distribution: zulu
           java-version: "11"
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
 
       - name: Build plugin
         working-directory: build-project
