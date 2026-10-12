@@ -16,7 +16,7 @@ class NartoDramaProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    private val episodePath = Regex("""/detail/watch/([^/?]+)/?(\\d+)?""")
+    private val episodePath = Regex("""/detail/watch/([^/?]+)/?(\d+)?""")
     private val streamApiBase = "https://edge.narto-drama.com"
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
@@ -71,8 +71,8 @@ class NartoDramaProvider : MainAPI() {
 
     private fun titleFromLink(link: Element): String {
         val text = link.text().trim()
-            .replace(Regex("""^Open\\s+""", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("""\\s+Episode\\s+\\d+.*$""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""^Open\s+""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""\s+Episode\s+\d+.*$""", RegexOption.IGNORE_CASE), "")
             .trim()
         if (text.isNotBlank()) return text
 
@@ -86,11 +86,11 @@ class NartoDramaProvider : MainAPI() {
         val document = app.get(url, headers = mapOf("Referer" to "$mainUrl/")).document
 
         val title = document.selectFirst("h1")?.text()?.trim()
-            ?.replace(Regex("""\\s+Episode\\s+\\d+.*$""", RegexOption.IGNORE_CASE), "")
+            ?.replace(Regex("""\s+Episode\s+\d+.*$""", RegexOption.IGNORE_CASE), "")
             ?.takeIf { it.isNotBlank() }
             ?: document.selectFirst("meta[property=og:title]")?.attr("content")
-                ?.replace(Regex("""\\s+Episode\\s+\\d+.*$""", RegexOption.IGNORE_CASE), "")
-                ?.replace(Regex("""\\s+-\\s+Free Streaming.*$""", RegexOption.IGNORE_CASE), "")
+                ?.replace(Regex("""\s+Episode\s+\d+.*$""", RegexOption.IGNORE_CASE), "")
+                ?.replace(Regex("""\s+-\s+Free Streaming.*$""", RegexOption.IGNORE_CASE), "")
                 ?.trim()
             ?: document.title().substringBefore(" - ").trim()
 
@@ -107,7 +107,7 @@ class NartoDramaProvider : MainAPI() {
         val episodeLinks = document.select("a[href]").mapNotNull { anchor ->
             val episodeUrl = anchor.absUrl("href")
             val match = Regex(
-                """/detail/watch/${Regex.escape(slug)}/(\\d+)(?:[/?#].*)?$""",
+                """/detail/watch/${Regex.escape(slug)}/(\d+)(?:[/?#].*)?$""",
                 RegexOption.IGNORE_CASE
             ).find(episodeUrl) ?: return@mapNotNull null
 
