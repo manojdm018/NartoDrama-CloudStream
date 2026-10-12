@@ -30,7 +30,7 @@ class NartoDramaProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
-        val url = "$mainUrl/search?q=${URLEncoder.encode(query, "UTF-8")}&lang=en-US&page=1"
+        val url = "$mainUrl/?lang=en-US&q=${URLEncoder.encode(query, "UTF-8")}"
         return parseCards(app.get(url).document)
     }
 
@@ -149,27 +149,57 @@ class NartoDramaProvider : MainAPI() {
         val response = app.get(data, headers = mapOf("Referer" to "$mainUrl/"))
         val document = response.document
         val html = document.outerHtml()
+        var found = false
 
-        // Use only a playback context supplied by the URL/page. We do not fabricate
-        // tokens or bypass the site's token checks.
-        val rsCtx = extractRsContext(data, document, html) ?: return false
-        val route = episodePath.find(data) ?: return false
+        // First collect every publicly exposed HTML5 media URL and iframe server.
+        // These become independent links so CloudStream can try another if one fails.
+        for (node in document.select("video[src], video source[src], source[src]")) {
+            val mediaUrl = node.absUrl("src")
+            if (!mediaUrl.startsWith("http")) continue
+            val type = when {
+                mediaUrl.contains(".m3u8", true) || node.attr("type").contains("mpegurl", true) ->
+                    ExtractorLinkType.M3U8
+                mediaUrl.contains(".mpd", true) || node.attr("type").contains("dash", true) ->
+                    ExtractorLinkType.DASH
+                else -> ExtractorLinkType.VIDEO
+            }
+            callback(
+                newExtractorLink(name, "$name HTML5", mediaUrl, type) {
+                    referer = data
+                    quality = Qualities.Unknown.value
+                }
+            )
+            found = true
+        }
+
+        for (frame in document.select("iframe[src]")) {
+            val embedUrl = frame.absUrl("src")
+            if (!embedUrl.startsWith("http")) continue
+            if (loadExtractor(embedUrl, data, subtitleCallback, callback)) {
+                found = true
+            }
+        }
+
+        // Resolve Narto's refresh API only when the page supplies an rs_ctx.
+        // Do not fabricate tokens or bypass the site's access checks.
+        val rsCtx = extractRsContext(data, document, html) ?: return found
+        val route = episodePath.find(data) ?: return found
         val slug = route.groupValues.getOrNull(1).orEmpty()
-        val episodeNumber = route.groupValues.getOrNull(2)?.toIntOrNull() ?: return false
-        if (slug.isBlank()) return false
+        val episodeNumber = route.groupValues.getOrNull(2)?.toIntOrNull() ?: return found
+        if (slug.isBlank()) return found
 
         val apiUrl = "$streamApiBase/e/rs/detail/watch/$slug/$episodeNumber/refresh-source" +
             "?rs_ctx=${URLEncoder.encode(rsCtx, "UTF-8")}"
-        val apiResponse = app.get(apiUrl, headers = mapOf(
-            "Referer" to data,
-            "Origin" to mainUrl,
-            "Accept" to "application/json"
-        ))
-        val json = runCatching { JSONObject(apiResponse.text) }.getOrNull() ?: return false
+        val apiResponse = runCatching {
+            app.get(apiUrl, headers = mapOf(
+                "Referer" to data,
+                "Origin" to mainUrl,
+                "Accept" to "application/json"
+            ))
+        }.getOrNull() ?: return found
+
+        val json = runCatching { JSONObject(apiResponse.text) }.getOrNull() ?: return found
         val payload = json.optJSONObject("data") ?: json
-        val directUrl = payload.optString("direct_play_url").takeIf { it.startsWith("http") }
-        val fallbackUrl = payload.optString("play_url").takeIf { it.startsWith("http") }
-        val mediaUrl = directUrl ?: fallbackUrl ?: return false
 
         val subtitles = payload.optJSONArray("multi_subtitles")
         if (subtitles != null) {
@@ -186,18 +216,30 @@ class NartoDramaProvider : MainAPI() {
             }
         }
 
-        val type = when {
-            mediaUrl.contains(".m3u8", ignoreCase = true) -> ExtractorLinkType.M3U8
-            mediaUrl.contains(".mpd", ignoreCase = true) -> ExtractorLinkType.DASH
-            else -> ExtractorLinkType.VIDEO
-        }
-        callback(
-            newExtractorLink(name, name, mediaUrl, type) {
-                referer = data
-                quality = Qualities.Unknown.value
+        // Do not discard the fallback when a direct link is present. Both are
+        // valid candidates and CloudStream can try a different link if playback fails.
+        val candidates = linkedMapOf<String, String>()
+        payload.optString("direct_play_url").takeIf { it.startsWith("http") }
+            ?.let { candidates["Narto Drama Direct"] = it }
+        payload.optString("play_url").takeIf { it.startsWith("http") }
+            ?.let { candidates["Narto Drama Fallback"] = it }
+
+        for ((label, mediaUrl) in candidates) {
+            val type = when {
+                mediaUrl.contains(".m3u8", true) -> ExtractorLinkType.M3U8
+                mediaUrl.contains(".mpd", true) -> ExtractorLinkType.DASH
+                else -> ExtractorLinkType.VIDEO
             }
-        )
-        return true
+            callback(
+                newExtractorLink(name, label, mediaUrl, type) {
+                    referer = data
+                    quality = Qualities.Unknown.value
+                }
+            )
+            found = true
+        }
+
+        return found
     }
 
     private fun extractRsContext(url: String, document: Document, html: String): String? {
