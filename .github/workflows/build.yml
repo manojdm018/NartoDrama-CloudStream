@@ -19,22 +19,21 @@ jobs:
         with:
           path: source
 
-      - name: Checkout CloudStream plugin template
+      - name: Checkout current CloudStream extension build template
         uses: actions/checkout@v4
         with:
-          repository: cloudstream3/plugin-template
-          ref: 46dcc26f038e4b00fe68b0998e39111f23ea4ffc
+          repository: recloudstream/extensions
+          ref: cf16b3b45cda911a36ddca69f9acbe4763c6a4b1
           path: build-project
 
-      - name: Install NartoDrama module in template
+      - name: Keep only the NartoDrama module
         shell: bash
         run: |
-          rm -rf build-project/ExampleProvider
+          find build-project -mindepth 1 -maxdepth 1 -type d \
+            ! -name ".git" ! -name "gradle" -exec rm -rf {} +
           cp -R source/NartoDrama build-project/NartoDrama
 
-      # Current Android command-line tools require Java 17, even though
-      # the pinned plugin template compiles most reliably on Java 11.
-      - name: Set up Java 17 for Android SDK tools
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: zulu
@@ -43,13 +42,7 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: platform-tools platforms;android-30 build-tools;30.0.3
-
-      - name: Set up Java 11 for the template build
-        uses: actions/setup-java@v4
-        with:
-          distribution: zulu
-          java-version: "11"
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
 
       - name: Build plugin
         working-directory: build-project
