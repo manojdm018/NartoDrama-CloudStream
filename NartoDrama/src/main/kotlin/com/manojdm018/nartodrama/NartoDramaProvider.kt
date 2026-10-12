@@ -310,7 +310,7 @@ class NartoDramaProvider : MainAPI() {
         // Read only the current episode's publicly supplied URLs.
         if (!found) {
             val rawEpisodes = Regex(
-                """(?:const|let|var)\\s+episodeItemsRaw\\s*=\\s*(\\[[\\s\\S]*?\\]);""",
+                """(?:const|let|var)\s+episodeItemsRaw\s*=\s*(\[[\s\S]*?\]);""",
                 RegexOption.IGNORE_CASE
             ).find(html)?.groupValues?.getOrNull(1)
 
