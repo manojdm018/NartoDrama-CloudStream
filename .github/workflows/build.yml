@@ -44,6 +44,10 @@ jobs:
               '        implementation("com.github.recloudstream.cloudstream:library:-SNAPSHOT")',
               '        val cloudstream by configurations\n        cloudstream("com.lagradost:cloudstream3:pre-release")'
           )
+          content = content.replace(
+              'classpath("com.github.recloudstream:gradle:-SNAPSHOT")',
+              'classpath("com.github.recloudstream:gradle:7cc64f92d88350ecbf775d6332de14dcaa71dcda")'
+          )
           with open(path, "w", encoding="utf-8") as file:
               file.write(content)
           PY
