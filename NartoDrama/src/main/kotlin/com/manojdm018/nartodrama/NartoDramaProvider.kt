@@ -4,9 +4,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.json.JSONArray
 import org.json.JSONObject
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
@@ -23,8 +20,8 @@ class NartoDramaProvider : MainAPI() {
     private val episodePath = Regex("""/detail/watch/([^/?]+)/?(\d+)?""")
     private val streamApiBase = "https://edge.narto-drama.com"
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? = coroutineScope {
-        // Language links use Narto Drama's own locale filters; genre links use its public genre pages.
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+        // Language links use Narto Drama's locale filters; genre links use its public genre pages.
         // No catalogue is copied or stored in this extension.
         val sections = listOf(
             "English Subtitles" to "/genre/drama?lang=en-US&page=$page",
@@ -42,29 +39,27 @@ class NartoDramaProvider : MainAPI() {
             "Horror" to "/genre/horror?lang=en-US&page=$page"
         )
 
-        val fetchedSections = sections.map { (title, path) ->
-            async {
-                val results = runCatching {
-                    parseCards(
-                        app.get(
-                            "$mainUrl$path",
-                            headers = mapOf("Referer" to "$mainUrl/")
-                        ).document
-                    )
-                }.getOrDefault(emptyList())
-                title to results
+        val fetchedSections = mutableListOf<Pair<String, List<SearchResponse>>>()
+        for ((title, path) in sections) {
+            val results = runCatching {
+                parseCards(
+                    app.get(
+                        "$mainUrl$path",
+                        headers = mapOf("Referer" to "$mainUrl/")
+                    ).document
+                )
+            }.getOrDefault(emptyList())
+            if (results.isNotEmpty()) {
+                fetchedSections.add(title to results)
             }
-        }.awaitAll()
+        }
 
-        val lists = fetchedSections
-            .filter { it.second.isNotEmpty() }
-            .map { (title, results) -> HomePageList(title, results) }
-
-        newHomePageResponse(
+        val lists = fetchedSections.map { (title, results) -> HomePageList(title, results) }
+        return newHomePageResponse(
             lists,
-            hasNext = fetchedSections.any { it.second.isNotEmpty() }
+            hasNext = fetchedSections.isNotEmpty()
         )
-    }
+    }}
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
