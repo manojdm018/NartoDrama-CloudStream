@@ -180,21 +180,33 @@ class NartoDramaProvider : MainAPI() {
             }
         }
 
-        // Resolve Narto's refresh API only when the page supplies an rs_ctx.
-        // Do not fabricate tokens or bypass the site's access checks.
-        val rsCtx = extractRsContext(data, document, html) ?: return found
+        // Resolve the site's public refresh-source endpoint using context supplied by
+        // the page when available. Never invent tokens or bypass access checks.
+        val rsCtx = extractRsContext(data, document, html)
         val route = episodePath.find(data) ?: return found
         val slug = route.groupValues.getOrNull(1).orEmpty()
         val episodeNumber = route.groupValues.getOrNull(2)?.toIntOrNull() ?: return found
         if (slug.isBlank()) return found
 
-        val apiUrl = "$streamApiBase/e/rs/detail/watch/$slug/$episodeNumber/refresh-source" +
-            "?rs_ctx=${URLEncoder.encode(rsCtx, "UTF-8")}"
+        val lang = Regex("""[?&]lang=([^&#]+)""", RegexOption.IGNORE_CASE)
+            .find(data)?.groupValues?.getOrNull(1)
+            ?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }
+            ?.takeIf { it.isNotBlank() } ?: "en-US"
+        val apiQuery = buildString {
+            append("force=1&force_edge=1&lang=")
+            append(URLEncoder.encode(lang, "UTF-8"))
+            if (!rsCtx.isNullOrBlank()) {
+                append("&rs_ctx=")
+                append(URLEncoder.encode(rsCtx, "UTF-8"))
+            }
+        }
+        val apiUrl = "$streamApiBase/e/rs/detail/watch/$slug/$episodeNumber/refresh-source?$apiQuery"
         val apiResponse = runCatching {
             app.get(apiUrl, headers = mapOf(
                 "Referer" to data,
                 "Origin" to mainUrl,
-                "Accept" to "application/json"
+                "Accept" to "application/json",
+                "X-Requested-With" to "XMLHttpRequest"
             ))
         }.getOrNull() ?: return found
 
@@ -257,8 +269,16 @@ class NartoDramaProvider : MainAPI() {
             ?.takeIf { it.isNotBlank() }
         if (!fromInput.isNullOrBlank()) return fromInput
 
+        // The current site can name its page-provided token
+        // refreshSourceContextToken instead of rs_ctx / rsCtx.
+        val contextVariable = Regex(
+            """\brefreshSourceContextToken\s*=\s*["']([^"']+)["']""",
+            RegexOption.IGNORE_CASE
+        ).find(html)?.groupValues?.getOrNull(1)
+        if (!contextVariable.isNullOrBlank()) return contextVariable
+
         val tokenPattern = Regex(
-            """(?:rs_ctx|rsCtx)["']?\s*[:=]\s*["']([A-Za-z0-9._~%+=/-]+)["']""",
+            """(?:refreshSourceContextToken|rs_ctx|rsCtx)["']?\s*[:=]\s*["']([^"']+)["']""",
             RegexOption.IGNORE_CASE
         )
         return tokenPattern.find(html)?.groupValues?.getOrNull(1)
