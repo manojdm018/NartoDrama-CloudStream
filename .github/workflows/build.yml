@@ -1,0 +1,58 @@
+name: Build NartoDrama CloudStream plugin
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Checkout CloudStream plugin template
+        uses: actions/checkout@v4
+        with:
+          repository: cloudstream3/plugin-template
+          ref: 46dcc26f038e4b00fe68b0998e39111f23ea4ffc
+          path: build-project
+
+      - name: Install NartoDrama module in template
+        shell: bash
+        run: |
+          rm -rf build-project/ExampleProvider
+          cp -R source/NartoDrama build-project/NartoDrama
+
+      - name: Set up Java 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "11"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build plugin
+        working-directory: build-project
+        run: |
+          chmod +x gradlew
+          ./gradlew NartoDrama:make makePluginsJson
+
+      - name: Upload CloudStream plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: NartoDrama-cs3-plugin
+          path: |
+            build-project/NartoDrama/build/*.cs3
+            build-project/build/plugins.json
+          if-no-files-found: error
+          retention-days: 14
