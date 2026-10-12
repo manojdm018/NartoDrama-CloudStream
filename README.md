@@ -19,7 +19,23 @@ A CloudStream plugin project for browsing Narto Drama's public drama catalogue.
 4. Open the finished run and download the `NartoDrama-cs3-plugin` artifact.
 5. Extract the ZIP and install the `.cs3` file in CloudStream if your CloudStream version supports local plugin installation.
 
-The workflow builds the extension using the upstream CloudStream plugin template. The first build can fail if that template or the upstream Gradle plugin changes; check the action log if it does.
+The workflow builds the extension using the CloudStream plugin tools. It also publishes a `builds` branch intended to work as a CloudStream repository.
+
+## Install from CloudStream
+
+After the latest **Build NartoDrama CloudStream plugin** workflow finishes successfully:
+
+1. Open CloudStream and go to **Extensions**.
+2. Find the option to add an extension repository.
+3. Paste this repository manifest URL:
+
+   `https://raw.githubusercontent.com/manojdm018/NartoDrama-CloudStream/builds/repo.json`
+
+4. Refresh repositories and install **NartoDrama**.
+
+If the repository manifest is not available yet, open the **Actions** tab and check the latest build. You can also download the `NartoDrama-cs3-plugin` artifact from a successful run and extract the `.cs3` file instead.
+
+**Important:** A successful build only confirms the plugin compiles. Searching, episode listing, and especially video playback must still be tested against the live Narto Drama website; its player may use dynamically loaded streams that this initial version cannot see.
 
 ## Sources
 
