@@ -151,14 +151,15 @@ class NartoDramaProvider : MainAPI() {
                 type.contains("mpegurl") || type.contains("m3u8")
             if (isHls || mediaUrl.contains(".mp4", true) || type.startsWith("video/")) {
                 callback(
-                    ExtractorLink(
+                    newExtractorLink(
                         name,
                         name,
                         mediaUrl,
-                        data,
-                        Qualities.Unknown.value,
-                        isHls
-                    )
+                        if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        referer = data
+                        quality = Qualities.Unknown.value
+                    }
                 )
                 found = true
             }
