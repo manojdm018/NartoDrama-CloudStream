@@ -33,23 +33,60 @@ jobs:
             ! -name ".git" ! -name "gradle" -exec rm -rf {} +
           cp -R source/NartoDrama build-project/NartoDrama
 
-      - name: Use published CloudStream API compile stubs
+      - name: Checkout CloudStream Gradle plugin source
+        uses: actions/checkout@v4
+        with:
+          repository: recloudstream/gradle
+          ref: 7cc64f92d88350ecbf775d6332de14dcaa71dcda
+          path: gradle-plugin
+
+      - name: Prepare local build dependencies
         shell: bash
         run: |
           python3 - <<'PY'
-          path = "build-project/build.gradle.kts"
-          with open(path, "r", encoding="utf-8") as file:
-              content = file.read()
-          content = content.replace(
-              '        implementation("com.github.recloudstream.cloudstream:library:-SNAPSHOT")',
-              '        val cloudstream by configurations\n        cloudstream("com.lagradost:cloudstream3:pre-release")'
+          from pathlib import Path
+
+          plugin_build = Path("gradle-plugin/build.gradle.kts")
+          plugin_text = plugin_build.read_text(encoding="utf-8")
+          plugin_text = plugin_text.replace(
+              '    implementation("com.github.vidstige:jadb:v1.2.1")\n',
+              ""
           )
-          content = content.replace(
+          plugin_build.write_text(plugin_text, encoding="utf-8")
+
+          # The ADB deploy task is not needed for GitHub Actions builds.
+          # Replace its implementation so the Gradle plugin can build without
+          # downloading JADB from JitPack.
+          adb_task = Path(
+              "gradle-plugin/src/main/kotlin/com/lagradost/cloudstream3/gradle/tasks/DeployWithAdbTask.kt"
+          )
+          adb_task.write_text(
+              """package com.lagradost.cloudstream3.gradle.tasks
+
+          import org.gradle.api.DefaultTask
+
+          abstract class DeployWithAdbTask : DefaultTask()
+          """,
+              encoding="utf-8"
+          )
+
+          root_build = Path("build-project/build.gradle.kts")
+          root_text = root_build.read_text(encoding="utf-8")
+          root_text = root_text.replace(
               'classpath("com.github.recloudstream:gradle:-SNAPSHOT")',
-              'classpath("com.github.recloudstream:gradle:7cc64f92d88350ecbf775d6332de14dcaa71dcda")'
+              'classpath("com.lagradost.cloudstream3:gradle:local-SNAPSHOT")'
           )
-          with open(path, "w", encoding="utf-8") as file:
-              file.write(content)
+          root_text = root_text.replace(
+              '        implementation("com.github.recloudstream.cloudstream:library:-SNAPSHOT")',
+              '        val cloudstream by configurations\n'
+              '        cloudstream("com.lagradost:cloudstream3:pre-release")'
+          )
+          root_text = root_text.replace(
+              '    repositories {\n        google()',
+              '    repositories {\n        mavenLocal()\n        google()',
+              1
+          )
+          root_build.write_text(root_text, encoding="utf-8")
           PY
 
       - name: Set up Java 17
@@ -57,6 +94,12 @@ jobs:
         with:
           distribution: zulu
           java-version: "17"
+
+      - name: Build and publish CloudStream Gradle plugin locally
+        working-directory: gradle-plugin
+        run: |
+          chmod +x gradlew
+          ./gradlew publishToMavenLocal
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
