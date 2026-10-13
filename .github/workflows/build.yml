@@ -31,7 +31,7 @@ jobs:
       - name: Copy the two independent extension modules
         shell: bash
         run: |
-          find build-project -mindepth 1 -maxdepth 1 -type d \\
+          find build-project -mindepth 1 -maxdepth 1 -type d ! -name ".git" ! -name "gradle" -exec rm -rf {} +
             ! -name ".git" ! -name "gradle" -exec rm -rf {} +
           cp -R source/NartoDrama build-project/NartoDrama
           cp -R source/DramaFren build-project/DramaFren
@@ -52,7 +52,7 @@ jobs:
           plugin_build = Path("gradle-plugin/build.gradle.kts")
           plugin_text = plugin_build.read_text(encoding="utf-8")
           plugin_text = plugin_text.replace(
-              '    implementation("com.github.vidstige:jadb:v1.2.1")\\n',
+              '    implementation("com.github.vidstige:jadb:v1.2.1")\n',
               ""
           )
           plugin_build.write_text(plugin_text, encoding="utf-8")
@@ -79,12 +79,12 @@ jobs:
           )
           root_text = root_text.replace(
               '        implementation("com.github.recloudstream.cloudstream:library:-SNAPSHOT")',
-              '        val cloudstream by configurations\\n'
+              '        val cloudstream by configurations\n'
               '        cloudstream("com.lagradost:cloudstream3:pre-release")'
           )
           root_text = root_text.replace(
-              '    repositories {\\n        google()',
-              '    repositories {\\n        mavenLocal()\\n        google()',
+              '    repositories {\n        mavenLocal()\n        google()',
+              '    repositories {\n        mavenLocal()\n        google()',
               1
           )
           root_build.write_text(root_text, encoding="utf-8")
@@ -162,7 +162,7 @@ jobs:
               dest.mkdir()
               shutil.copy2(binaries[0], dest / f"{module}.cs3")
               (dest / "plugins.json").write_text(
-                  json.dumps([item], indent=4) + "\\n",
+              json.dumps([item], indent=4) + "\n",
                   encoding="utf-8"
               )
               manifest = {
@@ -174,7 +174,7 @@ jobs:
                   ],
               }
               (dest / "repo.json").write_text(
-                  json.dumps(manifest, indent=2) + "\\n",
+                  json.dumps(manifest, indent=2) + "\n",
                   encoding="utf-8"
               )
           PY
