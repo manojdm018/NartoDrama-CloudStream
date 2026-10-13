@@ -31,7 +31,7 @@ GitHub Actions builds both modules separately and publishes their individual pac
 
 ## Content preferences
 
-Both providers filter explicit BL and common female-lead metadata signals. This is a metadata-based filter, so a title may still need manual review if the site does not publish reliable genre or lead information. Custom in-detail SUB/DUB toggles are not supported by the standard CloudStream plugin interface; a paired version must also exist on the source site.
+Both providers filter explicit BL and common female-lead metadata signals. NartoDrama also filters releases explicitly marked as dubbed in titles or release metadata, so original releases remain visible. This depends on the source site providing a detectable title/tag/audio-version signal; a dub with no such signal may still appear. Custom in-detail SUB/DUB toggles are not supported by the standard CloudStream plugin interface; a paired version must also exist on the source site.
 
 ## Sources
 
