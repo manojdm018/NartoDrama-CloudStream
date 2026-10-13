@@ -204,17 +204,23 @@ class DramaFrenProvider : MainAPI() {
         val selector = "a[href], a[data-href], a[data-url], a[data-link], a[data-src]"
 
         for (anchor in document.select(selector)) {
-            val rawHref = listOf("href", "data-href", "data-url", "data-link", "data-src")
+            // Some episode anchors use href="#" and store the actual destination
+            // in data-href/data-url. Validate each attribute rather than taking
+            // the first non-empty value.
+            val href = listOf("href", "data-href", "data-url", "data-link", "data-src")
                 .map { anchor.attr(it).trim() }
-                .firstOrNull { it.isNotBlank() }
+                .filter { it.isNotBlank() }
+                .mapNotNull { raw ->
+                    val candidate = runCatching { URI(currentUrl).resolve(raw).toString() }
+                        .getOrDefault(raw)
+                        .substringBefore("#")
+                    if (!candidate.startsWith(mainUrl, ignoreCase = true)) return@mapNotNull null
+                    val candidatePath = runCatching { URI(candidate).path.orEmpty() }
+                        .getOrDefault("")
+                    candidate.takeIf { watchPath.find(candidatePath) != null }
+                }
+                .firstOrNull()
                 ?: continue
-            val href = runCatching { URI(currentUrl).resolve(rawHref).toString() }
-                .getOrDefault(rawHref)
-                .substringBefore("#")
-            if (!href.startsWith(mainUrl, ignoreCase = true)) continue
-
-            val path = runCatching { URI(href).path.orEmpty() }.getOrDefault("")
-            if (watchPath.find(path) == null) continue
 
             val key = href.substringBefore("?").trimEnd('/').lowercase(Locale.ROOT)
             if (!seen.add(key)) continue
@@ -349,8 +355,8 @@ class DramaFrenProvider : MainAPI() {
 
         // If the provider has only supplied a series URL, follow its first published episode.
         if (!watchPath.containsMatchIn(watchUrl)) {
-            val episodeUrl = document.select("a[href*='/watch/']")
-                .firstOrNull()?.absUrl("href")
+            val episodeUrl = parseEpisodeLinks(document, watchUrl)
+                .firstOrNull()?.url
             if (!episodeUrl.isNullOrBlank() && episodeUrl.startsWith(mainUrl, ignoreCase = true)) {
                 watchUrl = episodeUrl
                 document = runCatching {
