@@ -220,7 +220,21 @@ class NartoDramaProvider : MainAPI() {
             }
             else -> fetchHomeRows(page)
         }
-        return newHomePageResponse(rows, hasNext = rows.isNotEmpty())
+        // Strict home-screen rule requested: hide any displayed title containing
+        // the word "dubbed", case-insensitively. Keep this filter on the Home
+        // page response itself so it does not depend on source audio metadata.
+        val visibleRows = if (key == "home") {
+            rows.mapNotNull { row ->
+                val visibleItems = row.list.filterNot { item ->
+                    item.name.contains("dubbed", ignoreCase = true)
+                }
+                if (visibleItems.isEmpty()) null
+                else HomePageList(row.name, visibleItems, row.isHorizontalImages)
+            }
+        } else {
+            rows
+        }
+        return newHomePageResponse(visibleRows, hasNext = visibleRows.isNotEmpty())
     }
 
     private suspend fun fetchHomeRows(page: Int): List<HomePageList> {
