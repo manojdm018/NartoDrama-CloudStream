@@ -538,7 +538,46 @@ class NartoDramaProvider : MainAPI() {
         val hasRomance = synopsisCategoryPatterns.first { it.first == "Romance" }.second
             .containsMatchIn(signals)
         if (hasMaleLead && hasRomance) categories.add("Male Lead Romance")
+        if (matchesRebornFamilyThoughtsTrope(signals)) {
+            categories.add("Reborn: Family Hears His Thoughts")
+        }
         return categories.distinct()
+    }
+
+    /**
+     * Detect this specific story trope only when the public title/tags/synopsis
+     * point to each part: a previous life, rebirth, family betrayal tied to death,
+     * the family hearing his inner thoughts, and the family becoming supportive.
+     */
+    private fun matchesRebornFamilyThoughtsTrope(signals: String): Boolean {
+        val text = signals.replace(Regex("""<[^>]+>"""), " ")
+            .replace(Regex("""\s+"""), " ")
+        val family = """(?:family|families|parents?|father|mother|dad|mom|brothers?|sisters?|siblings|relatives|adoptive parents?|adoptive family|grandparents?|grandfather|grandmother|clan)"""
+        val hasPreviousLife = Regex(
+            """(?i)\b(?:previous|past|former|prior|first|last)\s+(?:life|incarnation)\b|前世"""
+        ).containsMatchIn(text)
+        val hasRebirth = Regex(
+            """(?i)\b(?:reborn|rebirth|reincarnat\w*|born again|return\w*\s+to life|regress\w*)\b|重生|转世"""
+        ).containsMatchIn(text)
+        val hasDeath = Regex(
+            """(?i)\b(?:die\w*|death|dead|kill\w*|murder\w*|execut\w*|poison\w*|left\s+(?:him|her|them)\s+to\s+die)\b"""
+        ).containsMatchIn(text)
+        val hasFamilyBetrayal = Regex(
+            """(?i)(?:$family).{0,120}(?:betray\w*|backstab\w*|turn(?:s|ed|ing)?\s+against|plot(?:s|ted|ting)?\s+against|kill\w*|murder\w*|poison\w*|frame\w*)|(?:betray\w*|backstab\w*|turn(?:s|ed|ing)?\s+against|plot(?:s|ted|ting)?\s+against|kill\w*|murder\w*|poison\w*|frame\w*).{0,120}(?:$family)"""
+        ).containsMatchIn(text)
+        val hasInnerThoughts = Regex(
+            """(?i)\b(?:inner thoughts?|thoughts? in (?:his|her|their) mind|inner voice|inner monologue|mind voice|what he thinks|his thoughts)\b|心声"""
+        ).containsMatchIn(text)
+        val familyHearsThoughts = hasInnerThoughts &&
+            Regex("""(?i)\b(?:hear\w*|listen\w*|read\w*|telepath\w*)\b""").containsMatchIn(text) &&
+            Regex("(?i)$family").containsMatchIn(text)
+        val familySupport = Regex("(?i)$family").containsMatchIn(text) &&
+            Regex(
+                """(?i)\b(?:support\w*|pamper\w*|spoil\w*|protect\w*|cherish\w*|dote\w*|treasure\w*|adore\w*|defend\w*|compensat\w*|make\s+(?:him|the boy|their son)\s+happy|treat\w*\s+him\s+(?:well|like)|care\s+for\s+him|stand\s+by\s+him|love\s+him|make\s+amends)\b"""
+            ).containsMatchIn(text)
+
+        return hasPreviousLife && hasRebirth && hasDeath && hasFamilyBetrayal &&
+            familyHearsThoughts && familySupport
     }
 
     private data class SynopsisDetails(
