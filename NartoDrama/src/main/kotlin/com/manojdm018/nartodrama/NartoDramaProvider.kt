@@ -314,7 +314,6 @@ class NartoDramaProvider : MainAPI() {
             raw.startsWith("javascript:", true) || raw == "#" ||
             raw.equals("about:blank", true)) return null
 
-        // srcset entries include a width/density suffix; use the first URL.
         raw = raw.substringBefore(",").trim().substringBefore(" ").trim()
         if (raw.isBlank() || raw.startsWith("data:", true)) return null
 
@@ -326,7 +325,25 @@ class NartoDramaProvider : MainAPI() {
                 .getOrDefault(absoluteUrl(raw))
         }
         if (!normalized.startsWith("http", true)) return null
+        val uri = runCatching { URI(normalized) }.getOrNull() ?: return null
+        val host = uri.host.orEmpty().lowercase(Locale.ROOT)
+        val path = uri.path.orEmpty().lowercase(Locale.ROOT)
         val lower = normalized.lowercase(Locale.ROOT)
+
+        // A card's generic data-url often points to its detail page, not its poster.
+        // Accept only image-looking URLs so CloudStream never tries to draw HTML as a poster.
+        val hasImageExtension = Regex("""\.(?:avif|bmp|gif|jpe?g|png|webp|svg)$""")
+            .containsMatchIn(path)
+        val hasPosterEndpoint = Regex(
+            """/(?:poster|posters|image|images|cover|covers|thumbnail|thumbnails|thumbs?)/[^/]+(?:/[^/]+)?$"""
+        ).containsMatchIn(path)
+        val knownImageHost = host.startsWith("img.") ||
+            host.startsWith("image.") ||
+            host.contains("cdn") ||
+            host.contains("nartodrama-api")
+        if (!hasImageExtension && !(hasPosterEndpoint && knownImageHost)) return null
+        if (host == "nartodrama.com" &&
+            (path.contains("/detail/watch/") || path.contains("/search/import"))) return null
         if (listOf(
                 "placeholder", "no-poster", "no_poster", "no-image", "no_image",
                 "noimage", "default-poster", "blank.gif", "transparent.png"
@@ -335,20 +352,29 @@ class NartoDramaProvider : MainAPI() {
     }
 
     private fun posterUrlFrom(container: Element): String? {
-        val nodes = listOf(container) + container.select("img, source, [style*=background-image], [data-poster], [data-cover]")
+        val nodes = mutableListOf<Element>()
+        if (container.tagName() in setOf("img", "source") ||
+            container.hasAttr("data-poster") ||
+            container.hasAttr("data-cover") ||
+            container.hasAttr("data-image") ||
+            container.attr("style").contains("background", ignoreCase = true)) {
+            nodes.add(container)
+        }
+        nodes.addAll(container.select(
+            "img, source, [style*=background-image], [data-poster], [data-cover], [data-image]"
+        ))
+        // Never use generic data-url: it can be the drama page URL.
         val attributes = listOf(
             "data-original", "data-lazy-src", "data-src", "data-poster",
-            "data-cover", "data-image", "data-url", "data-srcset", "srcset", "src"
+            "data-cover", "data-image", "data-srcset", "srcset", "src"
         )
         for (node in nodes) {
             for (attribute in attributes) {
-                val raw = node.attr(attribute)
-                val normalized = normalizedImageUrl(raw)
+                val normalized = normalizedImageUrl(node.attr(attribute))
                 if (normalized != null) return normalized
             }
-            val style = node.attr("style")
             val background = Regex("""(?i)background(?:-image)?\s*:[^;]*url\(['"]?([^'")]+)""")
-                .find(style)?.groupValues?.getOrNull(1)
+                .find(node.attr("style"))?.groupValues?.getOrNull(1)
             val normalizedBackground = background?.let { normalizedImageUrl(it) }
             if (normalizedBackground != null) return normalizedBackground
         }
@@ -509,8 +535,14 @@ class NartoDramaProvider : MainAPI() {
     private suspend fun fetchHomeRows(page: Int): List<HomePageList> {
         val rows = mutableListOf<HomePageList>()
 
-        // A popular row first, followed by official tag and genre pages from Narto Drama.
+        // Prefer Narto's un-targeted provider feed, then merge in cards from its
+        // server-rendered Hot catalogue. These cards contain actual drama-detail URLs,
+        // poster URLs and tag chips even if the provider JSON shape changes.
         rows.addAll(fetchProviderSections("anyreel", page, "en-US", "Popular", includeMetadataCategoryRows = true))
+        val hotFallback = fetchCatalogPage("/tag/hot", page, "en-US")
+        if (hotFallback.isNotEmpty()) {
+            rows.add(HomePageList("Popular Originals", hotFallback))
+        }
 
         val storyRows = listOf(
             "rebirth" to "Reborn & Rebirth",
@@ -909,8 +941,13 @@ class NartoDramaProvider : MainAPI() {
                 val href = absoluteUrl(anchor.attr("href"))
                 if (!isDetailWatchUrl(href)) continue
                 val title = titleFromLink(anchor)
-                if (title.isBlank() || !isAllowedDrama(title, anchor.text() + " " + anchor.outerHtml())) continue
-                val poster = posterUrlFrom(anchor.parents().firstOrNull { it.tagName() in setOf("article", "li", "div") && it.selectFirst("img, source, [style*=background-image]") != null } ?: anchor)
+                val cardContainer = anchor.parents().firstOrNull {
+                    it.tagName() in setOf("article", "li", "div") &&
+                        it.selectFirst("img, source, [style*=background-image], [data-poster], [data-cover], [data-image]") != null
+                } ?: anchor
+                val cardMetadata = cardContainer.text() + " " + cardContainer.outerHtml()
+                if (title.isBlank() || !isAllowedDrama(title, cardMetadata)) continue
+                val poster = posterUrlFrom(cardContainer)
                 pending.add(Triple(title, href, poster))
             }
         }
