@@ -153,21 +153,17 @@ class NartoDramaProvider : MainAPI() {
             !femaleLeadPattern.containsMatchIn(signals)
     }
 
-    // Hide audio-dub releases from the catalogue. Narto Drama marks many of
-    // these in the title (e.g. "(Dubbed)Title", "Title (Dublado)") and may
-    // also expose an explicit tag/version/audio field in its public item data.
-    // Do not use the page's global description or UI subtitle locale here:
-    // those describe the site/subtitle language, not a release's audio.
-    private val dubbedReleasePattern = Regex(
-        """(?i)\b(?:dubbed|dublado|dublada|dublados|dubladas|doblado|doblada|doblados|dobladas|dubbing|dubbed[- ]version|dub[- ]version)\b"""
+    // Narto Drama marks dubbed audio in titles using forms such as
+    // "(Dub)", "(Dubbed)", "[ENG DUB]", and "[English Dub]".
+    private val dubbedTitlePattern = Regex(
+        """(?i)\b(?:eng(?:lish)?[\s._-]*dub(?:bed)?|dub(?:bed|bing)?|dubbled|dublado|dublada|dublados|dubladas|doblado|doblada|doblados|dobladas|doubl[ée]s?|doublées?)\b"""
     )
 
-    private fun isDubbedRelease(title: String, metadata: String = ""): Boolean {
-        val signals = "$title $metadata"
-            .replace(Regex("""<[^>]+>"""), " ")
-            .replace(Regex("""\s+"""), " ")
-        return dubbedReleasePattern.containsMatchIn(signals)
-    }
+    private fun isDubbedTitle(title: String): Boolean =
+        dubbedTitlePattern.containsMatchIn(title)
+
+    private fun isDubbedRelease(title: String, metadata: String = ""): Boolean =
+        isDubbedTitle(title) || dubbedTitlePattern.containsMatchIn(metadata)
 
     private fun isDubbedRelease(title: String, item: JSONObject): Boolean {
         val explicitFlags = listOf("is_dubbed", "isDubbed", "dubbed", "has_dub", "hasDub")
@@ -185,6 +181,170 @@ class NartoDramaProvider : MainAPI() {
             item.opt(key)?.takeUnless { it == JSONObject.NULL }?.toString()
         }.joinToString(" ")
         return isDubbedRelease(title, releaseMetadata)
+    }
+
+    private fun baseAudioTitle(rawTitle: String): String {
+        val withoutDubMarkers = rawTitle
+            .replace(
+                Regex(
+                    """(?i)\b(?:eng(?:lish)?[\s._-]*dub(?:bed)?|dub(?:bed|bing)?|dubbled|dublado|dublada|dublados|dubladas|doblado|doblada|doblados|dobladas|doubl[ée]s?|doublées?)\b"""
+                ),
+                " "
+            )
+            .replace(Regex("""[\[\](){}（）【】]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+        return withoutDubMarkers
+    }
+
+    private fun audioTitleKey(title: String): String =
+        baseAudioTitle(title)
+            .lowercase(Locale.ROOT)
+            .replace(Regex("""[^\p{L}\p{N}]"""), "")
+
+    private fun filterOriginalRows(rows: List<HomePageList>): List<HomePageList> {
+        val allOriginals = rows.flatMap { it.list }
+            .filterNot { isDubbedTitle(it.name) }
+        val originalsByTitle = allOriginals
+            .filter { audioTitleKey(it.name).isNotBlank() }
+            .groupBy { audioTitleKey(it.name) }
+            .mapValues { (_, candidates) -> candidates.first() }
+
+        return rows.mapNotNull { row ->
+            val visible = row.list.mapNotNull { item ->
+                if (!isDubbedTitle(item.name)) item
+                else originalsByTitle[audioTitleKey(item.name)]
+            }.filterNot { isDubbedTitle(it.name) }
+                .distinctBy { it.url }
+
+            if (visible.isEmpty()) null
+            else HomePageList(row.name, visible, row.isHorizontalImages)
+        }
+    }
+
+    private suspend fun findOriginalCounterpart(dubbedTitle: String): SearchResponse? {
+        val baseTitle = baseAudioTitle(dubbedTitle)
+        val key = audioTitleKey(dubbedTitle)
+        if (baseTitle.isBlank() || key.isBlank()) return null
+
+        // Try the site's public search index by the undubbed title. Only accept
+        // an unmarked result with the same normalized title; never guess a match.
+        val searchUrl = mainUrl + "/search?q=" + URLEncoder.encode(baseTitle, "UTF-8") +
+            "&limit=30&lang=en-US"
+        val response = runCatching {
+            app.get(searchUrl, headers = requestHeaders())
+        }.getOrNull()
+        if (response != null) {
+            val candidates = parseSearchJson(response.text) +
+                parseCards(response.document) +
+                parseJsonLdCards(response.document)
+            candidates.firstOrNull {
+                !isDubbedTitle(it.name) && audioTitleKey(it.name) == key &&
+                    isAllowedDrama(it.name)
+            }?.let { return it }
+        }
+
+        val json = requestProviderJson("dc_search", "en-US", query = baseTitle)
+            ?: requestProviderJson("dc_search", "en-US", query = baseTitle, includeTarget = false)
+            ?: return null
+        val sections = json.optJSONArray("sections") ?: return null
+        for (i in 0 until sections.length()) {
+            val items = sections.optJSONObject(i)?.optJSONArray("items") ?: continue
+            val candidate = parseApiItems(items).firstOrNull {
+                !isDubbedTitle(it.name) && audioTitleKey(it.name) == key &&
+                    isAllowedDrama(it.name)
+            }
+            if (candidate != null) return candidate
+        }
+        return null
+    }
+
+    private suspend fun replaceHomeDubbedWithOriginals(rows: List<HomePageList>): List<HomePageList> {
+        val allItems = rows.flatMap { it.list }.distinctBy { it.url }
+        val originalsByTitle = allItems
+            .filterNot { isDubbedTitle(it.name) }
+            .filter { audioTitleKey(it.name).isNotBlank() }
+            .groupBy { audioTitleKey(it.name) }
+            .mapValues { (_, candidates) -> candidates.first() }
+            .toMutableMap()
+
+        // If the counterpart isn't already in another home row, query Narto
+        // search for a title-exact original. Limit lookups so one home refresh
+        // doesn't issue an unbounded number of extra requests.
+        val missingCounterparts = allItems
+            .filter { isDubbedTitle(it.name) }
+            .distinctBy { audioTitleKey(it.name) }
+            .filter { audioTitleKey(it.name).isNotBlank() &&
+                !originalsByTitle.containsKey(audioTitleKey(it.name)) }
+            .take(8)
+
+        for (dubbed in missingCounterparts) {
+            val key = audioTitleKey(dubbed.name)
+            val original = runCatching { findOriginalCounterpart(dubbed.name) }.getOrNull()
+            if (original != null && !isDubbedTitle(original.name) &&
+                audioTitleKey(original.name) == key) {
+                originalsByTitle[key] = original
+            }
+        }
+
+        return rows.mapNotNull { row ->
+            val visible = row.list.mapNotNull { item ->
+                if (!isDubbedTitle(item.name)) item
+                else originalsByTitle[audioTitleKey(item.name)]
+            }
+                .filterNot { isDubbedTitle(it.name) }
+                .distinctBy { it.url }
+
+            if (visible.isEmpty()) null
+            else HomePageList(row.name, visible, row.isHorizontalImages)
+        }
+    }
+
+    private fun normalizedImageUrl(rawValue: String): String? {
+        var raw = rawValue.trim().replace("&amp;", "&")
+        if (raw.isBlank() || raw.startsWith("data:", true) ||
+            raw.startsWith("javascript:", true) || raw == "#" ||
+            raw.equals("about:blank", true)) return null
+
+        // srcset entries include a width/density suffix; use the first URL.
+        raw = raw.substringBefore(",").trim().substringBefore(" ").trim()
+        if (raw.isBlank() || raw.startsWith("data:", true)) return null
+
+        val normalized = when {
+            raw.startsWith("https://", true) -> raw
+            raw.startsWith("http://", true) -> "https://" + raw.substringAfter("://")
+            raw.startsWith("//") -> "https:$raw"
+            else -> runCatching { URI("$mainUrl/").resolve(raw).toString() }
+                .getOrDefault(absoluteUrl(raw))
+        }
+        if (!normalized.startsWith("http", true)) return null
+        val lower = normalized.lowercase(Locale.ROOT)
+        if (listOf(
+                "placeholder", "no-poster", "no_poster", "no-image", "no_image",
+                "noimage", "default-poster", "blank.gif", "transparent.png"
+            ).any { it in lower }) return null
+        return normalized
+    }
+
+    private fun posterUrlFrom(container: Element): String? {
+        val nodes = container.select("img, source, [style*=background-image]")
+        val attributes = listOf(
+            "data-original", "data-lazy-src", "data-src", "data-poster",
+            "data-cover", "data-image", "data-url", "data-srcset", "srcset", "src"
+        )
+        for (node in nodes) {
+            for (attribute in attributes) {
+                val raw = node.attr(attribute)
+                val normalized = normalizedImageUrl(raw)
+                if (normalized != null) return normalized
+            }
+            val style = node.attr("style")
+            val background = Regex("""(?i)background(?:-image)?\s*:[^;]*url\(['"]?([^'")]+)""")
+                .find(style)?.groupValues?.getOrNull(1)
+            val normalizedBackground = background?.let { normalizedImageUrl(it) }
+            if (normalizedBackground != null) return normalizedBackground
+        }
+        return null
     }
 
     private val streamApiBase = "https://edge.narto-drama.com"
@@ -220,19 +380,10 @@ class NartoDramaProvider : MainAPI() {
             }
             else -> fetchHomeRows(page)
         }
-        // Strict home-screen rule requested: hide any displayed title containing
-        // the word "dubbed", case-insensitively. Keep this filter on the Home
-        // page response itself so it does not depend on source audio metadata.
         val visibleRows = if (key == "home") {
-            rows.mapNotNull { row ->
-                val visibleItems = row.list.filterNot { item ->
-                    item.name.contains("dubbed", ignoreCase = true)
-                }
-                if (visibleItems.isEmpty()) null
-                else HomePageList(row.name, visibleItems, row.isHorizontalImages)
-            }
+            replaceHomeDubbedWithOriginals(rows)
         } else {
-            rows
+            filterOriginalRows(rows)
         }
         return newHomePageResponse(visibleRows, hasNext = visibleRows.isNotEmpty())
     }
@@ -441,9 +592,11 @@ class NartoDramaProvider : MainAPI() {
                     "&limit=50&lang=" + URLEncoder.encode(locale, "UTF-8")
                 val response = runCatching { app.get(url, headers = requestHeaders()) }.getOrNull() ?: continue
                 val jsonResults = parseSearchJson(response.text)
-                if (jsonResults.isNotEmpty()) return deduplicateResults(jsonResults)
+                val originalJsonResults = originalOnlyResults(jsonResults)
+                if (originalJsonResults.isNotEmpty()) return originalJsonResults
                 val pageResults = parseCards(response.document) + parseJsonLdCards(response.document)
-                if (pageResults.isNotEmpty()) return deduplicateResults(pageResults)
+                val originalPageResults = originalOnlyResults(pageResults)
+                if (originalPageResults.isNotEmpty()) return originalPageResults
             }
         }
 
@@ -458,7 +611,8 @@ class NartoDramaProvider : MainAPI() {
                     val items = sections.optJSONObject(i)?.optJSONArray("items") ?: continue
                     out.addAll(parseApiItems(items))
                 }
-                if (out.isNotEmpty()) return deduplicateResults(out)
+                val originalResults = originalOnlyResults(out)
+                if (originalResults.isNotEmpty()) return originalResults
             }
         }
         return emptyList()
@@ -488,12 +642,13 @@ class NartoDramaProvider : MainAPI() {
             val url = absoluteUrl(rawUrl)
             if (!isNartoUrl(url) || !seen.add(url)) continue
             if (!isAllowedDrama(title, item.toString())) continue
-            if (isDubbedRelease(title, item)) continue
-            val image = item.optString("poster_url")
-                .ifBlank { item.optString("cover_url") }
-                .ifBlank { item.optString("cover") }
-                .ifBlank { item.optString("poster") }
-                .takeIf { it.isNotBlank() }?.let { absoluteUrl(it) }
+            val image = listOf(
+                "poster_url", "cover_url", "cover", "poster",
+                "image_url", "thumbnail_url", "thumb_url", "thumbnail", "image"
+            ).asSequence()
+                .map { item.optString(it).trim() }
+                .mapNotNull { normalizedImageUrl(it) }
+                .firstOrNull()
             out.add(newTvSeriesSearchResponse(title, url, TvType.TvSeries) { posterUrl = image })
         }
         return out
@@ -526,14 +681,26 @@ class NartoDramaProvider : MainAPI() {
                     val rawUrl = item.optString("url").trim()
                     if (title.isBlank() || rawUrl.isBlank()) continue
                     if (!isAllowedDrama(title, item.toString())) continue
-                    val releaseMetadata = listOf(
-                        item.optString("genre"), item.optString("keywords"),
-                        item.optString("audioLanguage"), item.optString("version")
-                    ).joinToString(" ")
-                    if (isDubbedRelease(title, releaseMetadata)) continue
                     val url = absoluteUrl(rawUrl)
                     if (!isNartoUrl(url) || !seen.add(url)) continue
-                    val image = item.optString("image").takeIf { it.isNotBlank() }?.let { absoluteUrl(it) }
+                    val image = when (val rawImage = item.opt("image")) {
+                        is String -> normalizedImageUrl(rawImage)
+                        is JSONObject -> normalizedImageUrl(rawImage.optString("url"))
+                        is JSONArray -> {
+                            var selected: String? = null
+                            for (imageIndex in 0 until rawImage.length()) {
+                                val entry = rawImage.opt(imageIndex)
+                                val candidate = when (entry) {
+                                    is String -> normalizedImageUrl(entry)
+                                    is JSONObject -> normalizedImageUrl(entry.optString("url"))
+                                    else -> null
+                                }
+                                if (candidate != null) { selected = candidate; break }
+                            }
+                            selected
+                        }
+                        else -> null
+                    }
                     out.add(newTvSeriesSearchResponse(title, url, TvType.TvSeries) { posterUrl = image })
                 }
             }
@@ -544,6 +711,17 @@ class NartoDramaProvider : MainAPI() {
     private fun deduplicateResults(items: List<SearchResponse>): List<SearchResponse> {
         val seen = HashSet<String>()
         return items.filter { seen.add(it.url) }
+    }
+
+    private fun originalOnlyResults(items: List<SearchResponse>): List<SearchResponse> {
+        val originals = items.filterNot { isDubbedTitle(it.name) }
+        val seenTitles = HashSet<String>()
+        val seenUrls = HashSet<String>()
+        return originals.filter { item ->
+            val titleKey = audioTitleKey(item.name)
+            seenUrls.add(item.url) &&
+                (titleKey.isBlank() || seenTitles.add(titleKey))
+        }
     }
 
     private fun absoluteUrl(raw: String): String {
@@ -571,8 +749,11 @@ class NartoDramaProvider : MainAPI() {
         val pending = mutableListOf<Triple<String, String, String?>>()
         if (cards.isNotEmpty()) {
             for (card in cards) {
-                val anchor = card.selectFirst("a[href*='/detail/watch/'], a[href*='/search/import'], a[href]")
-                val rawHref = card.attr("data-watch-url").ifBlank { anchor?.attr("href").orEmpty() }
+                val anchor = card.selectFirst("a[href*='/detail/watch/']")
+                val rawHref = sequenceOf(
+                    card.attr("data-watch-url"),
+                    anchor?.attr("href").orEmpty()
+                ).firstOrNull { it.contains("/detail/watch/", ignoreCase = true) }.orEmpty()
                 if (rawHref.isBlank()) continue
                 val href = absoluteUrl(rawHref)
                 if (!isNartoUrl(href)) continue
@@ -581,27 +762,16 @@ class NartoDramaProvider : MainAPI() {
                         ?: anchor?.let { titleFromLink(it) }.orEmpty()
                 }.trim()
                 if (title.isBlank() || !isAllowedDrama(title, card.text() + " " + card.outerHtml())) continue
-                if (isDubbedRelease(title, card.text() + " " + card.outerHtml())) continue
-                val poster = card.selectFirst("img.poster, img")?.let { img ->
-                    img.attr("src").ifBlank { img.attr("data-src") }
-                        .ifBlank { img.attr("data-original") }
-                        .ifBlank { img.attr("data-lazy-src") }
-                        .takeIf { it.isNotBlank() }?.let { absoluteUrl(it) }
-                }
+                val poster = posterUrlFrom(card)
                 pending.add(Triple(title, href, poster))
             }
         } else {
-            for (anchor in document.select("a[href*='/detail/watch/'], a[href*='/search/import']")) {
+            for (anchor in document.select("a[href*='/detail/watch/']")) {
                 val href = absoluteUrl(anchor.attr("href"))
                 if (!isNartoUrl(href)) continue
                 val title = titleFromLink(anchor)
                 if (title.isBlank() || !isAllowedDrama(title, anchor.text() + " " + anchor.outerHtml())) continue
-                if (isDubbedRelease(title, anchor.text() + " " + anchor.outerHtml())) continue
-                val poster = anchor.selectFirst("img")?.let { img ->
-                    img.attr("src").ifBlank { img.attr("data-src") }
-                        .ifBlank { img.attr("data-original") }
-                        .takeIf { it.isNotBlank() }?.let { absoluteUrl(it) }
-                }
+                val poster = posterUrlFrom(anchor.parents().firstOrNull { it.tagName() in setOf("article", "li", "div") && it.selectFirst("img, source, [style*=background-image]") != null } ?: anchor)
                 pending.add(Triple(title, href, poster))
             }
         }
