@@ -2,6 +2,7 @@ package com.manojdm018.dramafren
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.extractors.VidStack
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -185,24 +186,54 @@ class DramaFrenProvider : MainAPI() {
     }
 
     private fun episodeNumber(text: String, fallback: Int): Int {
-        return Regex("""(?i)\b(?:EP(?:ISODE)?\.?\s*)(\d+)\b""")
+        return Regex("""(?i)\b(?:EP(?:ISODE)?)[\s._-]*(\d+)\b""")
             .find(text)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: fallback
+    }
+
+    private fun episodeDisplayTitle(raw: String, number: Int): String {
+        val cleaned = cleanTitle(raw)
+            .replace(Regex("""(?i)^\s*EP(?:ISODE)?[\s._-]*\d+[\s|:–-]*"""), "")
+            .replace(Regex("""(?i)\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\s*$"""), "")
+            .trim(' ', '-', '|', '–', ':')
+        return cleaned.takeIf { it.isNotBlank() && it.length < 90 } ?: "Episode " + number
     }
 
     private fun parseEpisodeLinks(document: Document, currentUrl: String): List<EpisodeCandidate> {
         val episodes = mutableListOf<EpisodeCandidate>()
         val seen = HashSet<String>()
+        val selector = "a[href], a[data-href], a[data-url], a[data-link], a[data-src]"
 
-        for (anchor in document.select("a[href*='/watch/']")) {
-            val href = anchor.absUrl("href").substringBefore("#")
-            if (href.isBlank() || !href.startsWith(mainUrl, ignoreCase = true)) continue
-            val path = runCatching { URI(href).path.orEmpty() }.getOrDefault("")
-            if (watchPath.find(path) == null) continue
-            if (!seen.add(href.substringBefore("?").trimEnd('/').lowercase(Locale.ROOT))) continue
+        for (anchor in document.select(selector)) {
+            // Some episode anchors use href="#" and store the actual destination
+            // in data-href/data-url. Validate each attribute rather than taking
+            // the first non-empty value.
+            val href = listOf("href", "data-href", "data-url", "data-link", "data-src")
+                .map { anchor.attr(it).trim() }
+                .filter { it.isNotBlank() }
+                .mapNotNull { raw ->
+                    val candidate = runCatching { URI(currentUrl).resolve(raw).toString() }
+                        .getOrDefault(raw)
+                        .substringBefore("#")
+                    if (!candidate.startsWith(mainUrl, ignoreCase = true)) return@mapNotNull null
+                    val candidatePath = runCatching { URI(candidate).path.orEmpty() }
+                        .getOrDefault("")
+                    candidate.takeIf { watchPath.find(candidatePath) != null }
+                }
+                .firstOrNull()
+                ?: continue
 
-            val title = cleanTitle(anchor.attr("title").ifBlank { anchor.text() })
-            val number = episodeNumber(anchor.text() + " " + anchor.attr("title"), episodes.size + 1)
-            episodes.add(EpisodeCandidate(href, number, title))
+            val key = href.substringBefore("?").trimEnd('/').lowercase(Locale.ROOT)
+            if (!seen.add(key)) continue
+
+            val rawTitle = listOf(
+                anchor.text(),
+                anchor.attr("title"),
+                anchor.attr("aria-label"),
+                anchor.attr("data-title"),
+                anchor.attr("data-episode")
+            ).firstOrNull { it.isNotBlank() }.orEmpty()
+            val number = episodeNumber(rawTitle + " " + href, episodes.size + 1)
+            episodes.add(EpisodeCandidate(href, number, episodeDisplayTitle(rawTitle, number)))
         }
 
         if (episodes.isEmpty() && watchPath.containsMatchIn(currentUrl)) {
@@ -210,7 +241,7 @@ class DramaFrenProvider : MainAPI() {
             episodes.add(EpisodeCandidate(currentUrl, number, "Episode " + number))
         }
 
-        return episodes.distinctBy { it.url }.sortedBy { it.number }
+        return episodes.sortedBy { it.number }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -277,6 +308,40 @@ class DramaFrenProvider : MainAPI() {
         }
     }
 
+    private suspend fun loadDramaFrenEmbed(
+        embed: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val host = runCatching { URI(embed).host.orEmpty().lowercase(Locale.ROOT) }
+            .getOrDefault("")
+
+        // DramaFren's primary player is a VidStack/UPNShare-style embed on a
+        // custom host. CloudStream's generic host lookup does not match that
+        // custom hostname, so invoke VidStack directly before trying others.
+        if (host == "upns.pro" || host.endsWith(".upns.pro") ||
+            host.contains("rpmshare") || host.contains("streamp2p")) {
+            val extractedLinks = mutableListOf<ExtractorLink>()
+            val extractedSubtitles = mutableListOf<SubtitleFile>()
+            runCatching {
+                VidStack().getUrl(
+                    embed,
+                    referer,
+                    { extractedSubtitles.add(it) },
+                    { if (it.url.isNotBlank()) extractedLinks.add(it) }
+                )
+            }
+            extractedSubtitles.forEach(subtitleCallback)
+            extractedLinks.forEach(callback)
+            if (extractedLinks.isNotEmpty()) return true
+        }
+
+        return runCatching {
+            loadExtractor(embed, referer, subtitleCallback, callback)
+        }.getOrDefault(false)
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -290,8 +355,8 @@ class DramaFrenProvider : MainAPI() {
 
         // If the provider has only supplied a series URL, follow its first published episode.
         if (!watchPath.containsMatchIn(watchUrl)) {
-            val episodeUrl = document.select("a[href*='/watch/']")
-                .firstOrNull()?.absUrl("href")
+            val episodeUrl = parseEpisodeLinks(document, watchUrl)
+                .firstOrNull()?.url
             if (!episodeUrl.isNullOrBlank() && episodeUrl.startsWith(mainUrl, ignoreCase = true)) {
                 watchUrl = episodeUrl
                 document = runCatching {
@@ -320,26 +385,34 @@ class DramaFrenProvider : MainAPI() {
         }
 
         val embedUrls = linkedSetOf<String>()
-        for (frame in document.select("iframe[src], iframe[data-src]")) {
-            val embed = frame.absUrl("src")
-                .ifBlank { frame.absUrl("data-src") }
-                .ifBlank { frame.attr("src").ifBlank { frame.attr("data-src") } }
-            if (embed.startsWith("http", ignoreCase = true) && embed != watchUrl) embedUrls.add(embed)
+        for (frame in document.select("iframe[src], iframe[data-src], iframe[data-lazy-src], iframe[data-url], iframe[data-embed]")) {
+            for (attribute in listOf("src", "data-src", "data-lazy-src", "data-url", "data-embed")) {
+                val raw = frame.attr(attribute).trim()
+                if (raw.isBlank()) continue
+                val embed = runCatching { URI(watchUrl).resolve(raw).toString() }.getOrDefault(raw)
+                if (embed.startsWith("http", ignoreCase = true) && embed != watchUrl) {
+                    embedUrls.add(embed)
+                }
+            }
         }
 
-        // DramaFren lists alternate player servers alongside its primary iframe.
+        // Alternate server tabs may link to external embeds. Ignore same-page
+        // controls here: their active iframe was already collected above.
         for (anchor in document.select("a[href]")) {
             val label = anchor.text().lowercase(Locale.ROOT)
             val href = anchor.absUrl("href")
             if (!href.startsWith("http", ignoreCase = true)) continue
+            val host = runCatching { URI(href).host.orEmpty().lowercase(Locale.ROOT) }
+                .getOrDefault("")
+            if (host == "dramafren.org" || host.endsWith(".dramafren.org")) continue
             if (label.contains("upnshare") || label.contains("abyss") ||
-                href.contains("upns.pro", true) || href.contains("abyss", true)) {
+                host.endsWith("upns.pro") || host.contains("abyss", true)) {
                 embedUrls.add(href)
             }
         }
 
         for (embed in embedUrls) {
-            found = loadExtractor(embed, watchUrl, subtitleCallback, callback) || found
+            found = loadDramaFrenEmbed(embed, watchUrl, subtitleCallback, callback) || found
         }
 
         return found
