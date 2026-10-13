@@ -23,8 +23,10 @@ class DramaFrenProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.TvSeries)
 
     override val mainPage = mainPageOf(
-        "$mainUrl/" to "Home",
-        "$mainUrl/series/" to "Latest Series"
+        "$mainUrl/?csbrowse=home" to "For You",
+        "$mainUrl/?csbrowse=stories" to "Story Types",
+        "$mainUrl/?csbrowse=genres" to "Genres",
+        "$mainUrl/series/?csbrowse=latest" to "Latest Series"
     )
 
     private val seriesPath = Regex("""/series/([^/?#]+)/?""", RegexOption.IGNORE_CASE)
@@ -46,7 +48,30 @@ class DramaFrenProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val base = request.data.takeIf { it.startsWith(mainUrl) } ?: "$mainUrl/"
+        val view = request.data.substringAfter("csbrowse=", "").substringBefore("&")
+        if (view == "stories") {
+            val rows = fetchSearchRows(page, listOf(
+                "rebirth" to "Reborn & Rebirth",
+                "time travel" to "Time Travel",
+                "revenge" to "Revenge",
+                "hidden identity" to "Hidden Identity",
+                "CEO" to "CEO Romance",
+                "billionaire" to "Billionaire"
+            ))
+            return newHomePageResponse(rows, hasNext = rows.isNotEmpty())
+        }
+        if (view == "genres") {
+            val rows = fetchSearchRows(page, listOf(
+                "romance" to "Romance",
+                "fantasy" to "Fantasy",
+                "action" to "Action",
+                "thriller" to "Thriller"
+            ))
+            return newHomePageResponse(rows, hasNext = rows.isNotEmpty())
+        }
+
+        val latest = view == "latest"
+        val base = if (latest) "$mainUrl/series/" else "$mainUrl/"
         val url = if (page <= 1) base else {
             val clean = base.trimEnd('/')
             "$clean/page/$page/"
@@ -57,8 +82,27 @@ class DramaFrenProvider : MainAPI() {
         }.getOrNull() ?: return newHomePageResponse(emptyList(), hasNext = false)
 
         val results = parseCards(document)
-        val rows = if (results.isEmpty()) emptyList() else listOf(HomePageList(request.name, results))
+        val rows = if (results.isEmpty()) emptyList() else listOf(
+            HomePageList(if (latest) "Latest Series" else "For You", results)
+        )
         return newHomePageResponse(rows, hasNext = results.isNotEmpty())
+    }
+
+    private suspend fun fetchSearchRows(
+        page: Int,
+        searches: List<Pair<String, String>>
+    ): List<HomePageList> {
+        val rows = mutableListOf<HomePageList>()
+        for ((query, label) in searches) {
+            val url = "$mainUrl/?s=" + URLEncoder.encode(query, "UTF-8") +
+                if (page > 1) "&paged=" + page else ""
+            val document = runCatching {
+                app.get(url, headers = requestHeaders()).document
+            }.getOrNull() ?: continue
+            val results = parseCards(document)
+            if (results.isNotEmpty()) rows.add(HomePageList(label, results))
+        }
+        return rows
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
