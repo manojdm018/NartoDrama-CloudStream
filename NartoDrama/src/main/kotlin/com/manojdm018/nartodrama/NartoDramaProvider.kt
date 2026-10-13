@@ -625,7 +625,10 @@ class NartoDramaProvider : MainAPI() {
             val cleaned = row.list.mapNotNull { old ->
                 val inspectedItem = validItems[old.url]
                 if (inspectedItem != null) inspectedItem
-                else if (!inspected.containsKey(old.url) && !isDubbedTitle(old.name)) old
+                else if (
+                    !isDubbedTitle(old.name) &&
+                    (inspected[old.url] == null || inspected[old.url]?.second == null)
+                ) old
                 else null
             }.filter { hasUsablePoster(it) && !isDubbedTitle(it.name) }
                 .distinctBy { it.url }
