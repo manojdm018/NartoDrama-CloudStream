@@ -153,6 +153,40 @@ class NartoDramaProvider : MainAPI() {
             !femaleLeadPattern.containsMatchIn(signals)
     }
 
+    // Hide audio-dub releases from the catalogue. Narto Drama marks many of
+    // these in the title (e.g. "(Dubbed)Title", "Title (Dublado)") and may
+    // also expose an explicit tag/version/audio field in its public item data.
+    // Do not use the page's global description or UI subtitle locale here:
+    // those describe the site/subtitle language, not a release's audio.
+    private val dubbedReleasePattern = Regex(
+        """(?i)\b(?:dubbed|dublado|dublada|dublados|dubladas|doblado|doblada|doblados|dobladas|dubbing|dubbed[- ]version|dub[- ]version)\b"""
+    )
+
+    private fun isDubbedRelease(title: String, metadata: String = ""): Boolean {
+        val signals = "$title $metadata"
+            .replace(Regex("""<[^>]+>"""), " ")
+            .replace(Regex("""\s+"""), " ")
+        return dubbedReleasePattern.containsMatchIn(signals)
+    }
+
+    private fun isDubbedRelease(title: String, item: JSONObject): Boolean {
+        val explicitFlags = listOf("is_dubbed", "isDubbed", "dubbed", "has_dub", "hasDub")
+        if (explicitFlags.any { key ->
+                val raw = item.opt(key)
+                raw == true || raw?.toString()?.equals("true", ignoreCase = true) == true
+            }) return true
+
+        val releaseMetadataKeys = listOf(
+            "tags", "tag", "labels", "label", "audio_language", "audioLanguage",
+            "audio_lang", "audioLang", "audio_type", "audioType", "version",
+            "edition", "release_type", "releaseType", "dub_status", "dubStatus"
+        )
+        val releaseMetadata = releaseMetadataKeys.mapNotNull { key ->
+            item.opt(key)?.takeUnless { it == JSONObject.NULL }?.toString()
+        }.joinToString(" ")
+        return isDubbedRelease(title, releaseMetadata)
+    }
+
     private val streamApiBase = "https://edge.narto-drama.com"
 
 
@@ -440,6 +474,7 @@ class NartoDramaProvider : MainAPI() {
             val url = absoluteUrl(rawUrl)
             if (!isNartoUrl(url) || !seen.add(url)) continue
             if (!isAllowedDrama(title, item.toString())) continue
+            if (isDubbedRelease(title, item)) continue
             val image = item.optString("poster_url")
                 .ifBlank { item.optString("cover_url") }
                 .ifBlank { item.optString("cover") }
@@ -477,6 +512,11 @@ class NartoDramaProvider : MainAPI() {
                     val rawUrl = item.optString("url").trim()
                     if (title.isBlank() || rawUrl.isBlank()) continue
                     if (!isAllowedDrama(title, item.toString())) continue
+                    val releaseMetadata = listOf(
+                        item.optString("genre"), item.optString("keywords"),
+                        item.optString("audioLanguage"), item.optString("version")
+                    ).joinToString(" ")
+                    if (isDubbedRelease(title, releaseMetadata)) continue
                     val url = absoluteUrl(rawUrl)
                     if (!isNartoUrl(url) || !seen.add(url)) continue
                     val image = item.optString("image").takeIf { it.isNotBlank() }?.let { absoluteUrl(it) }
@@ -527,6 +567,7 @@ class NartoDramaProvider : MainAPI() {
                         ?: anchor?.let { titleFromLink(it) }.orEmpty()
                 }.trim()
                 if (title.isBlank() || !isAllowedDrama(title, card.text() + " " + card.outerHtml())) continue
+                if (isDubbedRelease(title, card.text() + " " + card.outerHtml())) continue
                 val poster = card.selectFirst("img.poster, img")?.let { img ->
                     img.attr("src").ifBlank { img.attr("data-src") }
                         .ifBlank { img.attr("data-original") }
@@ -541,6 +582,7 @@ class NartoDramaProvider : MainAPI() {
                 if (!isNartoUrl(href)) continue
                 val title = titleFromLink(anchor)
                 if (title.isBlank() || !isAllowedDrama(title, anchor.text() + " " + anchor.outerHtml())) continue
+                if (isDubbedRelease(title, anchor.text() + " " + anchor.outerHtml())) continue
                 val poster = anchor.selectFirst("img")?.let { img ->
                     img.attr("src").ifBlank { img.attr("data-src") }
                         .ifBlank { img.attr("data-original") }
@@ -589,6 +631,9 @@ class NartoDramaProvider : MainAPI() {
             document.select(".genres, .tags, .tag-links, .genre, .tag").text()
         ).joinToString(" ")
         if (!isAllowedDrama(title, exclusionMetadata)) return null
+        val releaseTags = document.select(".genres, .tags, .tag-links, .genre, .tag").text()
+        val releaseKeywords = document.selectFirst("meta[name=keywords]")?.attr("content").orEmpty()
+        if (isDubbedRelease(title, "$releaseTags $releaseKeywords")) return null
 
         val poster = document.selectFirst("meta[property=og:image]")?.absUrl("content")
             ?.takeIf { it.startsWith("http") }
