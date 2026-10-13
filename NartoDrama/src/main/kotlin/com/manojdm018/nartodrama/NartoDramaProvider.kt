@@ -276,7 +276,7 @@ class NartoDramaProvider : MainAPI() {
             .distinctBy { audioTitleKey(it.name) }
             .filter { audioTitleKey(it.name).isNotBlank() &&
                 !originalsByTitle.containsKey(audioTitleKey(it.name)) }
-            .take(8)
+            .take(16)
 
         for (dubbed in missingCounterparts) {
             val key = audioTitleKey(dubbed.name)
@@ -293,6 +293,7 @@ class NartoDramaProvider : MainAPI() {
                 else originalsByTitle[audioTitleKey(item.name)]
             }
                 .filterNot { isDubbedTitle(it.name) }
+                .filter { hasUsablePoster(it) }
                 .distinctBy { it.url }
 
             if (visible.isEmpty()) null
@@ -327,7 +328,7 @@ class NartoDramaProvider : MainAPI() {
     }
 
     private fun posterUrlFrom(container: Element): String? {
-        val nodes = container.select("img, source, [style*=background-image]")
+        val nodes = listOf(container) + container.select("img, source, [style*=background-image], [data-poster], [data-cover]")
         val attributes = listOf(
             "data-original", "data-lazy-src", "data-src", "data-poster",
             "data-cover", "data-image", "data-url", "data-srcset", "srcset", "src"
@@ -345,6 +346,119 @@ class NartoDramaProvider : MainAPI() {
             if (normalizedBackground != null) return normalizedBackground
         }
         return null
+    }
+
+    // These categories are inferred dynamically from the title and the public
+    // metadata supplied with each catalogue item (tags, synopsis, plot, description).
+    // Source-supplied tags are preferred; synopsis keywords are a fallback.
+    private val synopsisCategoryPatterns: List<Pair<String, Regex>> = listOf(
+        "Reborn & Rebirth" to Regex("""(?i)\b(?:rebirth|reborn|reincarnat\w*|resurrect\w*|previous life|past life|second life|born again)\b|重生|转世"""),
+        "Time Travel" to Regex("""(?i)\b(?:time[\s-]*travel|time loop|travel\w* back|go(?:es|ing)? back in time|back to (?:the )?past|rewind|time reversal|timeline reset)\b|穿越|时空"""),
+        "Revenge" to Regex("""(?i)\b(?:revenge|avenge\w*|payback|retaliat\w*|counterattack|strike\w* back|betray\w*|humiliat\w*|vendetta)\b|复仇|虐渣"""),
+        "Hidden Identity" to Regex("""(?i)\b(?:hidden identity|secret identity|identity twist|double life|undercover|disguis\w*|conceal\w* (?:his|her|their) identity|pretend\w* to be|unknown heir)\b|隐藏身份|身份反转"""),
+        "Zero to Hero" to Regex("""(?i)\b(?:zero to hero|underdog|rags to riches|underestimated|overlooked|weakling|lowly|rise\w* to (?:power|the top|fame))\b|逆袭"""),
+        "Second Chance" to Regex("""(?i)\b(?:second chance|start\w* over|another chance|redo\w*|return\w* from the dead|given a second life|all too late|regret)\b"""),
+        "System & Superpowers" to Regex("""(?i)\b(?:system|superpowers?|awaken\w*|level[\s-]*up|skill tree|quest system|powers? unlocked|chosen one|cultivation system)\b|系统|觉醒"""),
+        "CEO & Billionaire" to Regex("""(?i)\b(?:ceo|billionaire|millionaire|tycoon|chairman|company heir|wealthy heir|heir to the|richest man|richest woman)\b"""),
+        "Romance" to Regex("""(?i)\b(?:romance|romantic|love|lover|marriage|married|wife|husband|bride|wedding|dating|contract marriage|flash marriage|fianc[eé])\b|爱情|恋爱|婚姻"""),
+        "Male Lead" to Regex("""(?i)(?:#|\\b)(?:male lead|male protagonist|male[- ]led|male main character)\b|男频|男主"""),
+        "Fantasy" to Regex("""(?i)\b(?:fantasy|magic|magical|dragon|demon|immortal|cultivation|werewolf|vampire|alpha king|supernatural|otherworld|realm|mythical)\b|玄幻|修仙"""),
+        "Action" to Regex("""(?i)\b(?:action|fight\w*|battle\w*|martial arts|warrior|assassin|combat|soldier|weapon|warfare|tournament)\b"""),
+        "Thriller & Mystery" to Regex("""(?i)\b(?:thriller|mystery|murder|investigation|detective|conspiracy|serial killer|mysterious|suspense)\b"""),
+        "Crime & Mafia" to Regex("""(?i)\b(?:mafia|gangster|mob boss|underworld|crime|criminal|cartel|hitman|organized crime)\b"""),
+        "Ancient / Costume" to Regex("""(?i)\b(?:ancient|dynasty|emperor|empress|imperial|palace|royal|royalty|historical|costume drama|warlord|martial arts dynasty)\b|古代|皇帝|王朝"""),
+        "Family Drama" to Regex("""(?i)\b(?:family|father|mother|parent\w*|child\w*|children|twins|baby|inheritance|family drama|adopted son|adopted daughter)\b"""),
+        "Comedy" to Regex("""(?i)\b(?:comedy|funny|hilarious|comic|comical|prank)\b""")
+    )
+
+    private fun catalogueMetadata(item: JSONObject): String {
+        val likelyTextFields = listOf(
+            "title", "name", "description", "synopsis", "plot", "summary",
+            "story", "storyline", "intro", "overview", "tags", "tag",
+            "genres", "genre", "categories", "labels", "keywords",
+            "audio_type", "audioType", "version", "edition"
+        )
+        val fields = likelyTextFields.mapNotNull { key ->
+            item.opt(key)?.takeUnless { it == JSONObject.NULL }?.toString()
+        }
+        // Keep the full item too: sites sometimes put localized tag lists under
+        // nested properties whose names are not stable between providers.
+        return (fields + item.toString()).joinToString(" ")
+            .replace(Regex("""<[^>]+>"""), " ")
+            .replace(Regex("""\s+"""), " ")
+    }
+
+    private fun inferredCategories(title: String, metadata: String): List<String> {
+        val signals = "$title $metadata"
+        val categories = synopsisCategoryPatterns
+            .filter { (_, pattern) -> pattern.containsMatchIn(signals) }
+            .map { it.first }
+            .toMutableList()
+
+        val hasMaleLead = Regex(
+            """(?i)(?:#|\\b)(?:male lead|male protagonist|male[- ]led|male main character)\b|男频|男主"""
+        ).containsMatchIn(signals)
+        val hasRomance = synopsisCategoryPatterns.first { it.first == "Romance" }.second
+            .containsMatchIn(signals)
+        if (hasMaleLead && hasRomance) categories.add("Male Lead Romance")
+        return categories.distinct()
+    }
+
+    private fun isDetailWatchUrl(url: String): Boolean {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return false
+        val path = uri.path.orEmpty()
+        return isNartoUrl(url) && path.contains("/detail/watch/", ignoreCase = true) &&
+            episodePath.containsMatchIn(path)
+    }
+
+    private fun imageUrlFromItem(item: JSONObject): String? {
+        val keys = listOf(
+            "poster_url", "cover_url", "poster", "cover", "image_url",
+            "thumbnail_url", "thumb_url", "thumbnail", "image", "artwork",
+            "poster_image", "cover_image"
+        )
+
+        fun candidates(value: Any?): List<String> = when (value) {
+            is String -> listOf(value)
+            is JSONObject -> listOf(
+                "url", "src", "large", "original", "full", "image_url",
+                "poster_url", "cover_url", "path", "srcset"
+            ).mapNotNull { key ->
+                value.opt(key)?.takeUnless { it == JSONObject.NULL }?.toString()
+            }
+            is JSONArray -> (0 until value.length()).flatMap { index ->
+                candidates(value.opt(index))
+            }
+            else -> emptyList()
+        }
+
+        for (key in keys) {
+            val raw = item.opt(key) ?: continue
+            val image = candidates(raw).firstNotNullOfOrNull { normalizedImageUrl(it) }
+            if (image != null) return image
+        }
+        return null
+    }
+
+    private fun hasUsablePoster(item: SearchResponse): Boolean =
+        !item.posterUrl.isNullOrBlank() && normalizedImageUrl(item.posterUrl.orEmpty()) != null
+
+    private fun mergeHomeRows(rows: List<HomePageList>): List<HomePageList> {
+        val merged = linkedMapOf<String, Pair<String, MutableList<SearchResponse>>>()
+        val urlsByName = mutableMapOf<String, MutableSet<String>>()
+        for (row in rows) {
+            val key = row.name.trim().lowercase(Locale.ROOT)
+            if (key.isBlank()) continue
+            val pair = merged.getOrPut(key) { row.name to mutableListOf() }
+            val urls = urlsByName.getOrPut(key) { HashSet() }
+            for (item in row.list) {
+                if (urls.add(item.url)) pair.second.add(item)
+            }
+        }
+        return merged.values.mapNotNull { (name, items) ->
+            val postered = items.filter { hasUsablePoster(it) && !isDubbedTitle(it.name) }
+            if (postered.isEmpty()) null else HomePageList(name, postered)
+        }
     }
 
     private val streamApiBase = "https://edge.narto-drama.com"
@@ -380,19 +494,16 @@ class NartoDramaProvider : MainAPI() {
             }
             else -> fetchHomeRows(page)
         }
-        val visibleRows = if (key == "home") {
-            replaceHomeDubbedWithOriginals(rows)
-        } else {
-            filterOriginalRows(rows)
-        }
-        return newHomePageResponse(visibleRows, hasNext = visibleRows.isNotEmpty())
+        val visibleRows = replaceHomeDubbedWithOriginals(rows)
+        val finalRows = mergeHomeRows(visibleRows)
+        return newHomePageResponse(finalRows, hasNext = finalRows.isNotEmpty())
     }
 
     private suspend fun fetchHomeRows(page: Int): List<HomePageList> {
         val rows = mutableListOf<HomePageList>()
 
         // A popular row first, followed by official tag and genre pages from Narto Drama.
-        rows.addAll(fetchProviderSections("anyreel", page, "en-US", "Popular"))
+        rows.addAll(fetchProviderSections("anyreel", page, "en-US", "Popular", includeMetadataCategoryRows = true))
 
         val storyRows = listOf(
             "rebirth" to "Reborn & Rebirth",
@@ -505,7 +616,7 @@ class NartoDramaProvider : MainAPI() {
         locale: String,
         tabs: List<Pair<String, Int>> = emptyList(),
         query: String? = null,
-        includeTarget: Boolean = true
+        includeTarget: Boolean = false
     ): JSONObject? {
         val params = mutableListOf(
             "provider=" + URLEncoder.encode(provider, "UTF-8"),
@@ -537,13 +648,12 @@ class NartoDramaProvider : MainAPI() {
         provider: String,
         page: Int,
         locale: String,
-        providerLabel: String
+        providerLabel: String,
+        includeMetadataCategoryRows: Boolean = false
     ): List<HomePageList> {
-        var json = requestProviderJson(provider, locale)
-        if (!hasItems(json)) {
-            val relaxed = requestProviderJson(provider, locale, includeTarget = false)
-            if (hasItems(relaxed)) json = relaxed
-        }
+        // IMPORTANT: omitting target_lang asks Narto Drama for its original
+        // release instead of the locale-targeted dubbed variant.
+        var json = requestProviderJson(provider, locale, includeTarget = false)
         if (page > 1 && json != null) {
             val sections = json.optJSONArray("sections")
             val tabs = mutableListOf<Pair<String, Int>>()
@@ -554,28 +664,48 @@ class NartoDramaProvider : MainAPI() {
                 }
             }
             if (tabs.isNotEmpty()) {
-                val paged = requestProviderJson(provider, locale, tabs)
+                val paged = requestProviderJson(
+                    provider, locale, tabs, includeTarget = false
+                )
                 if (hasItems(paged)) json = paged
-                else {
-                    val relaxedPage = requestProviderJson(provider, locale, tabs, includeTarget = false)
-                    if (hasItems(relaxedPage)) json = relaxedPage
-                }
-            }
-        }
-        val sections = json?.optJSONArray("sections") ?: return emptyList()
-        val allResults = mutableListOf<SearchResponse>()
-        val seenUrls = HashSet<String>()
-        for (i in 0 until sections.length()) {
-            val sec = sections.optJSONObject(i) ?: continue
-            val items = sec.optJSONArray("items") ?: continue
-            for (result in parseApiItems(items)) {
-                if (seenUrls.add(result.url)) allResults.add(result)
             }
         }
 
-        // One clearly labelled home row per source app; merge that app's upstream tabs.
-        return if (allResults.isEmpty()) emptyList()
-        else listOf(HomePageList(providerLabel + " Dramas", allResults))
+        val sections = json?.optJSONArray("sections") ?: return emptyList()
+        val allResults = mutableListOf<SearchResponse>()
+        val seenUrls = HashSet<String>()
+        val categorized = linkedMapOf<String, MutableList<SearchResponse>>()
+        val categorizedUrls = mutableMapOf<String, MutableSet<String>>()
+
+        for (i in 0 until sections.length()) {
+            val sec = sections.optJSONObject(i) ?: continue
+            val items = sec.optJSONArray("items") ?: continue
+            for (itemIndex in 0 until items.length()) {
+                val sourceItem = items.optJSONObject(itemIndex) ?: continue
+                val parsed = parseApiItems(JSONArray().put(sourceItem))
+                val result = parsed.firstOrNull() ?: continue
+                if (seenUrls.add(result.url)) allResults.add(result)
+
+                if (includeMetadataCategoryRows) {
+                    val signals = catalogueMetadata(sourceItem)
+                    for (category in inferredCategories(result.name, signals)) {
+                        val urls = categorizedUrls.getOrPut(category) { HashSet() }
+                        if (urls.add(result.url)) {
+                            categorized.getOrPut(category) { mutableListOf() }.add(result)
+                        }
+                    }
+                }
+            }
+        }
+
+        if (allResults.isEmpty()) return emptyList()
+        val output = mutableListOf(HomePageList(providerLabel + " Originals", allResults))
+        if (includeMetadataCategoryRows) {
+            categorized.forEach { (category, items) ->
+                if (items.isNotEmpty()) output.add(HomePageList(category, items))
+            }
+        }
+        return output
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -640,15 +770,12 @@ class NartoDramaProvider : MainAPI() {
                 .ifBlank { item.optString("detail_url") }.trim()
             if (title.isBlank() || rawUrl.isBlank()) continue
             val url = absoluteUrl(rawUrl)
-            if (!isNartoUrl(url) || !seen.add(url)) continue
-            if (!isAllowedDrama(title, item.toString())) continue
-            val image = listOf(
-                "poster_url", "cover_url", "cover", "poster",
-                "image_url", "thumbnail_url", "thumb_url", "thumbnail", "image"
-            ).asSequence()
-                .map { item.optString(it).trim() }
-                .mapNotNull { normalizedImageUrl(it) }
-                .firstOrNull()
+            if (!isDetailWatchUrl(url) || !seen.add(url)) continue
+            if (!isAllowedDrama(title, catalogueMetadata(item))) continue
+            // The original-only endpoint should already avoid dubs, but enforce it
+            // at the item boundary as a second safeguard against tagged variants.
+            if (isDubbedRelease(title, item)) continue
+            val image = imageUrlFromItem(item) ?: continue
             out.add(newTvSeriesSearchResponse(title, url, TvType.TvSeries) { posterUrl = image })
         }
         return out
@@ -682,7 +809,7 @@ class NartoDramaProvider : MainAPI() {
                     if (title.isBlank() || rawUrl.isBlank()) continue
                     if (!isAllowedDrama(title, item.toString())) continue
                     val url = absoluteUrl(rawUrl)
-                    if (!isNartoUrl(url) || !seen.add(url)) continue
+                    if (!isDetailWatchUrl(url) || !seen.add(url)) continue
                     val image = when (val rawImage = item.opt("image")) {
                         is String -> normalizedImageUrl(rawImage)
                         is JSONObject -> normalizedImageUrl(rawImage.optString("url"))
@@ -701,6 +828,7 @@ class NartoDramaProvider : MainAPI() {
                         }
                         else -> null
                     }
+                    if (image == null) continue
                     out.add(newTvSeriesSearchResponse(title, url, TvType.TvSeries) { posterUrl = image })
                 }
             }
@@ -710,11 +838,13 @@ class NartoDramaProvider : MainAPI() {
 
     private fun deduplicateResults(items: List<SearchResponse>): List<SearchResponse> {
         val seen = HashSet<String>()
-        return items.filter { seen.add(it.url) }
+        return items.filter {
+            isDetailWatchUrl(it.url) && hasUsablePoster(it) && seen.add(it.url)
+        }
     }
 
     private fun originalOnlyResults(items: List<SearchResponse>): List<SearchResponse> {
-        val originals = items.filterNot { isDubbedTitle(it.name) }
+        val originals = items.filterNot { isDubbedTitle(it.name) }.filter { hasUsablePoster(it) }
         val seenTitles = HashSet<String>()
         val seenUrls = HashSet<String>()
         return originals.filter { item ->
@@ -756,19 +886,21 @@ class NartoDramaProvider : MainAPI() {
                 ).firstOrNull { it.contains("/detail/watch/", ignoreCase = true) }.orEmpty()
                 if (rawHref.isBlank()) continue
                 val href = absoluteUrl(rawHref)
-                if (!isNartoUrl(href)) continue
+                if (!isDetailWatchUrl(href)) continue
                 val title = card.attr("data-movie-title").ifBlank {
                     card.selectFirst("h1, h2, h3, h4, .title, .card-title")?.text()?.trim()
                         ?: anchor?.let { titleFromLink(it) }.orEmpty()
                 }.trim()
                 if (title.isBlank() || !isAllowedDrama(title, card.text() + " " + card.outerHtml())) continue
+                // Dub-labelled cards are retained here only long enough for the home
+                // resolver to find an exact-title original; they are never displayed.
                 val poster = posterUrlFrom(card)
                 pending.add(Triple(title, href, poster))
             }
         } else {
             for (anchor in document.select("a[href*='/detail/watch/']")) {
                 val href = absoluteUrl(anchor.attr("href"))
-                if (!isNartoUrl(href)) continue
+                if (!isDetailWatchUrl(href)) continue
                 val title = titleFromLink(anchor)
                 if (title.isBlank() || !isAllowedDrama(title, anchor.text() + " " + anchor.outerHtml())) continue
                 val poster = posterUrlFrom(anchor.parents().firstOrNull { it.tagName() in setOf("article", "li", "div") && it.selectFirst("img, source, [style*=background-image]") != null } ?: anchor)
