@@ -81,11 +81,9 @@ class NartoDramaProvider : MainAPI() {
         "second-chance" to "Second Chance",
         "counterattack" to "Counterattack",
         "underdog-rise" to "Underdog Rise",
-        "strong-female-lead" to "Strong Female Lead",
         "system" to "System & Superpowers",
         "ceo" to "CEO",
         "billionaire" to "Billionaire",
-        "boss-lady" to "Boss Lady",
         "high-society" to "High Society",
         "romantic-tension" to "Romantic Tension",
         "modern-romance" to "Modern Romance",
@@ -98,11 +96,9 @@ class NartoDramaProvider : MainAPI() {
         "mafia" to "Mafia",
         "youth" to "Youth",
         "ancient" to "Ancient / Costume",
-        "female-growth" to "Female Growth",
         "karma-payback" to "Karma Payback",
         "playing-dumb" to "Playing Dumb",
         "secret-identity" to "Secret Identity",
-        "heiress" to "Heiress",
         "redemption" to "Redemption",
         "wish-fulfillment" to "Wish Fulfillment",
         "forbidden-love" to "Forbidden Love",
@@ -111,7 +107,6 @@ class NartoDramaProvider : MainAPI() {
         "regret" to "Regret",
         "sweet-love" to "Sweet Love",
         "all-too-late" to "All Too Late",
-        "independent-woman" to "Independent Woman",
         "love-triangle" to "Love Triangle",
         "fantasy-romance" to "Fantasy Romance"
     )
@@ -136,6 +131,28 @@ class NartoDramaProvider : MainAPI() {
     override val mainPage = mainPageOf(*browsePages.toTypedArray())
 
     private val episodePath = Regex("""/detail/watch/([^/?]+)/?(\d+)?""")
+    private val blPattern = Regex(
+        """\b(?:BL|boys['’ ]+love|danmei|yaoi|shounen[- ]?ai|male[- ]male romance)\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val femaleLeadPattern = Regex(
+        """\b(?:strong female lead|female[- ]led|female lead|female protagonist|female growth|heiress|villainess|princess|duchess|empress|queen|boss lady|girlboss|girl boss|independent woman|female magistrate|lady magistrate|female general|her revenge|sister['’]s revenge|the female lead|girl power|miss\s+[a-z]{2,})\b""",
+        RegexOption.IGNORE_CASE
+    )
+
+    /**
+     * Exclude titles whose own title/card metadata explicitly identifies BL
+     * or common female-led story tags. This is a conservative metadata filter;
+     * a title with no reliable character metadata cannot be classified perfectly.
+     */
+    private fun isAllowedDrama(title: String, metadata: String = ""): Boolean {
+        val signals = "$title $metadata"
+            .replace(Regex("""<[^>]+>"""), " ")
+            .replace(Regex("""\s+"""), " ")
+        return !blPattern.containsMatchIn(signals) &&
+            !femaleLeadPattern.containsMatchIn(signals)
+    }
+
     private val streamApiBase = "https://edge.narto-drama.com"
 
 
@@ -208,7 +225,7 @@ class NartoDramaProvider : MainAPI() {
         val slugs = listOf(
             "rebirth", "time-travel", "revenge", "hidden-identity",
             "zero-to-hero", "second-chance", "counterattack", "underdog-rise",
-            "strong-female-lead", "system", "ceo", "billionaire",
+            "system", "ceo", "billionaire",
             "karma-payback", "werewolf", "ancient"
         )
         val rows = mutableListOf<HomePageList>()
@@ -422,6 +439,7 @@ class NartoDramaProvider : MainAPI() {
             if (title.isBlank() || rawUrl.isBlank()) continue
             val url = absoluteUrl(rawUrl)
             if (!isNartoUrl(url) || !seen.add(url)) continue
+            if (!isAllowedDrama(title, item.toString())) continue
             val image = item.optString("poster_url")
                 .ifBlank { item.optString("cover_url") }
                 .ifBlank { item.optString("cover") }
@@ -458,6 +476,7 @@ class NartoDramaProvider : MainAPI() {
                     val title = item.optString("name").ifBlank { item.optString("title") }.trim()
                     val rawUrl = item.optString("url").trim()
                     if (title.isBlank() || rawUrl.isBlank()) continue
+                    if (!isAllowedDrama(title, item.toString())) continue
                     val url = absoluteUrl(rawUrl)
                     if (!isNartoUrl(url) || !seen.add(url)) continue
                     val image = item.optString("image").takeIf { it.isNotBlank() }?.let { absoluteUrl(it) }
@@ -507,7 +526,7 @@ class NartoDramaProvider : MainAPI() {
                     card.selectFirst("h1, h2, h3, h4, .title, .card-title")?.text()?.trim()
                         ?: anchor?.let { titleFromLink(it) }.orEmpty()
                 }.trim()
-                if (title.isBlank()) continue
+                if (title.isBlank() || !isAllowedDrama(title, card.text() + " " + card.outerHtml())) continue
                 val poster = card.selectFirst("img.poster, img")?.let { img ->
                     img.attr("src").ifBlank { img.attr("data-src") }
                         .ifBlank { img.attr("data-original") }
@@ -521,7 +540,7 @@ class NartoDramaProvider : MainAPI() {
                 val href = absoluteUrl(anchor.attr("href"))
                 if (!isNartoUrl(href)) continue
                 val title = titleFromLink(anchor)
-                if (title.isBlank()) continue
+                if (title.isBlank() || !isAllowedDrama(title, anchor.text() + " " + anchor.outerHtml())) continue
                 val poster = anchor.selectFirst("img")?.let { img ->
                     img.attr("src").ifBlank { img.attr("data-src") }
                         .ifBlank { img.attr("data-original") }
@@ -562,6 +581,14 @@ class NartoDramaProvider : MainAPI() {
                 ?.replace(Regex("""\s+-\s+Free Streaming.*$""", RegexOption.IGNORE_CASE), "")
                 ?.trim()
             ?: document.title().substringBefore(" - ").trim()
+
+        val exclusionMetadata = listOf(
+            document.selectFirst("meta[name=keywords]")?.attr("content").orEmpty(),
+            document.selectFirst("meta[name=description]")?.attr("content").orEmpty(),
+            document.selectFirst("meta[property=og:description]")?.attr("content").orEmpty(),
+            document.select(".genres, .tags, .tag-links, .genre, .tag").text()
+        ).joinToString(" ")
+        if (!isAllowedDrama(title, exclusionMetadata)) return null
 
         val poster = document.selectFirst("meta[property=og:image]")?.absUrl("content")
             ?.takeIf { it.startsWith("http") }
