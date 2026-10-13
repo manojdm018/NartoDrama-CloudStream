@@ -124,17 +124,15 @@ class NartoDramaProvider : MainAPI() {
         "tl-PH" to "Filipino", "ms-MY" to "Malay", "hi-IN" to "Hindi",
         "ta-IN" to "Tamil", "te-IN" to "Telugu", "bn-BD" to "Bengali", "pl-PL" to "Polish"
     )
-    private val browsePages =
-        listOf(("$mainUrl/?csbrowse=home") to "For You") +
-        tagChoices.map { ("$mainUrl/?csbrowse=tag:" + it.first) to ("Story: " + it.second) } +
-        genreChoices.map { ("$mainUrl/?csbrowse=genre:" + it.first) to ("Genre: " + it.second) } +
-        languageChoices.map { ("$mainUrl/?csbrowse=lang:" + it.first) to ("Language: " + it.second) } +
-        listOf(
-            ("$mainUrl/?csbrowse=page:featured") to "Featured",
-            ("$mainUrl/?csbrowse=page:movies") to "Movies & Series",
-            ("$mainUrl/?csbrowse=page:anime") to "Anime"
-        ) +
-        providerChoices.map { ("$mainUrl/?csbrowse=provider:" + it.first) to ("Source App: " + it.second) }
+    // Keep CloudStream's built-in page picker short. Individual categories are grouped
+    // as vertically scrollable rows within these five browse pages.
+    private val browsePages = listOf(
+        ("$mainUrl/?csbrowse=home") to "For You",
+        ("$mainUrl/?csbrowse=stories") to "Story Types",
+        ("$mainUrl/?csbrowse=genres") to "Genres",
+        ("$mainUrl/?csbrowse=languages") to "Languages",
+        ("$mainUrl/?csbrowse=sources") to "Source Apps"
+    )
     override val mainPage = mainPageOf(*browsePages.toTypedArray())
 
     private val episodePath = Regex("""/detail/watch/([^/?]+)/?(\d+)?""")
@@ -147,6 +145,10 @@ class NartoDramaProvider : MainAPI() {
             .ifBlank { "provider:anyreel" }
         val rows = when {
             key == "home" -> fetchHomeRows(page)
+            key == "stories" -> fetchStoryRows(page)
+            key == "genres" -> fetchGenreRows(page)
+            key == "languages" -> fetchLanguageRows(page)
+            key == "sources" -> fetchSourceRows(page)
             key.startsWith("provider:") -> {
                 val provider = key.substringAfter("provider:")
                 val label = providerChoices.firstOrNull { it.first == provider }?.second ?: provider
@@ -199,6 +201,59 @@ class NartoDramaProvider : MainAPI() {
             if (results.isNotEmpty()) rows.add(HomePageList(title, results))
         }
 
+        return rows
+    }
+
+    private suspend fun fetchStoryRows(page: Int): List<HomePageList> {
+        val slugs = listOf(
+            "rebirth", "time-travel", "revenge", "hidden-identity",
+            "zero-to-hero", "second-chance", "counterattack", "underdog-rise",
+            "strong-female-lead", "system", "ceo", "billionaire",
+            "karma-payback", "werewolf", "ancient"
+        )
+        val rows = mutableListOf<HomePageList>()
+        for (slug in slugs) {
+            val title = tagChoices.firstOrNull { it.first == slug }?.second ?: slug
+            val results = fetchCatalogPage("/tag/" + slug, page, "en-US")
+            if (results.isNotEmpty()) rows.add(HomePageList(title, results))
+        }
+        return rows
+    }
+
+    private suspend fun fetchGenreRows(page: Int): List<HomePageList> {
+        val slugs = listOf(
+            "drama", "romance", "fantasy", "action", "comedy",
+            "thriller", "mystery", "horror", "crime", "adventure", "sci-fi", "family"
+        )
+        val rows = mutableListOf<HomePageList>()
+        for (slug in slugs) {
+            val title = genreChoices.firstOrNull { it.first == slug }?.second ?: slug
+            val results = fetchCatalogPage("/genre/" + slug, page, "en-US")
+            if (results.isNotEmpty()) rows.add(HomePageList(title, results))
+        }
+        return rows
+    }
+
+    private suspend fun fetchLanguageRows(page: Int): List<HomePageList> {
+        val locales = listOf("en-US", "id-ID", "hi-IN", "ta-IN", "te-IN", "tl-PH", "ja-JP", "ko-KR")
+        val rows = mutableListOf<HomePageList>()
+        for (locale in locales) {
+            val label = languageChoices.firstOrNull { it.first == locale }?.second ?: locale
+            rows.addAll(fetchProviderSections("anyreel", page, locale, label))
+        }
+        return rows
+    }
+
+    private suspend fun fetchSourceRows(page: Int): List<HomePageList> {
+        val providers = listOf(
+            "dramabox", "reelshort", "netshort", "goodshort",
+            "shortmax", "moboreels", "dramawave", "anyreel"
+        )
+        val rows = mutableListOf<HomePageList>()
+        for (provider in providers) {
+            val label = providerChoices.firstOrNull { it.first == provider }?.second ?: provider
+            rows.addAll(fetchProviderSections(provider, page, "en-US", label))
+        }
         return rows
     }
 
@@ -575,6 +630,16 @@ class NartoDramaProvider : MainAPI() {
                 expandedHlsMasters.add(mediaUrl)
                 val variants = parseHlsVariants(mediaUrl, data)
                 if (variants.isNotEmpty()) {
+                    // Keep the HLS master as an Auto option; child playlists may not expose
+                    // the master playlist's alternate audio renditions.
+                    if (emittedMediaUrls.add(mediaUrl)) {
+                        callback(
+                            newExtractorLink(name, "$label • Auto (audio tracks if available)", mediaUrl, ExtractorLinkType.M3U8) {
+                                referer = data
+                                quality = Qualities.Unknown.value
+                            }
+                        )
+                    }
                     for (variant in variants) {
                         if (!emittedMediaUrls.add(variant.url)) continue
                         callback(
