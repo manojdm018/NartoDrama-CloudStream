@@ -10,9 +10,6 @@ import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.util.Locale
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 
 class NartoDramaProvider : MainAPI() {
     override var mainUrl = "https://nartodrama.com"
@@ -458,8 +455,9 @@ class NartoDramaProvider : MainAPI() {
     )
 
     private val synopsisDetailCache = mutableMapOf<String, SynopsisDetails>()
+    private val synopsisAttempted = mutableSetOf<String>()
     private val maxSynopsisItemsPerHome = 120
-    private val synopsisBatchSize = 8
+    private val maxNewSynopsisReadsPerHome = 40
 
     private fun extractRelatedTags(document: Document): List<String> {
         val output = linkedSetOf<String>()
@@ -526,6 +524,7 @@ class NartoDramaProvider : MainAPI() {
     private suspend fun inspectDramaSynopsis(item: SearchResponse): SynopsisDetails? {
         synchronized(synopsisDetailCache) {
             synopsisDetailCache[item.url]?.let { return it }
+            if (!synopsisAttempted.add(item.url)) return null
         }
 
         val document = runCatching {
@@ -545,7 +544,10 @@ class NartoDramaProvider : MainAPI() {
 
         val details = SynopsisDetails(synopsis, tags, poster)
         synchronized(synopsisDetailCache) {
-            if (synopsisDetailCache.size >= 700) synopsisDetailCache.clear()
+            if (synopsisDetailCache.size >= 700) {
+                synopsisDetailCache.clear()
+                synopsisAttempted.clear()
+            }
             synopsisDetailCache[item.url] = details
         }
         return details
@@ -566,14 +568,27 @@ class NartoDramaProvider : MainAPI() {
 
         if (candidates.isEmpty()) return rows
 
+        // Read individual drama detail pages sequentially. The provider template
+        // doesn't include kotlinx-coroutines as a direct dependency, so don't use
+        // async/awaitAll here. Cache successful reads and inspect up to 40 new
+        // titles per refresh, choosing uninspected URLs so repeated home visits
+        // progressively classify the full 120-title candidate pool.
+        val pendingReads = synchronized(synopsisDetailCache) {
+            candidates.filter { item ->
+                !synopsisDetailCache.containsKey(item.url) &&
+                    !synopsisAttempted.contains(item.url)
+            }.take(maxNewSynopsisReadsPerHome)
+        }
+        for (item in pendingReads) {
+            runCatching { inspectDramaSynopsis(item) }
+        }
+
         val inspected = linkedMapOf<String, Pair<SearchResponse, SynopsisDetails?>>()
-        for (batch in candidates.chunked(synopsisBatchSize)) {
-            val results = coroutineScope {
-                batch.map { item ->
-                    async { item to runCatching { inspectDramaSynopsis(item) }.getOrNull() }
-                }.awaitAll()
+        for (item in candidates) {
+            val details = synchronized(synopsisDetailCache) {
+                synopsisDetailCache[item.url]
             }
-            for ((item, details) in results) inspected[item.url] = item to details
+            inspected[item.url] = item to details
         }
 
         val validItems = linkedMapOf<String, SearchResponse>()
