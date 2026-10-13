@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths-ignore:
       - "*.md"
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -113,6 +115,7 @@ jobs:
           ./gradlew NartoDrama:make makePluginsJson
 
       - name: Publish CloudStream repository branch
+        if: github.event_name != 'pull_request'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
