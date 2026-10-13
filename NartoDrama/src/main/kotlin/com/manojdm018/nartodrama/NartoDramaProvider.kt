@@ -858,7 +858,7 @@ class NartoDramaProvider : MainAPI() {
     private suspend fun fetchEnglishOriginalShorts(page: Int): List<SearchResponse> {
         val sourceProviders = listOf(
             "anyreel", "netshort", "dramabox", "goodshort", "reelshort",
-            "shortmax", "dramawave", "moboreels", "flextv", "flexTV"
+            "shortmax", "dramawave", "moboreels", "flextv", "meloshort"
         )
         val results = linkedMapOf<String, SearchResponse>()
         for (provider in sourceProviders) {
