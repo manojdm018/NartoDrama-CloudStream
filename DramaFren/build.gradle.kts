@@ -1,4 +1,4 @@
-version = 1
+version = 2
 
 cloudstream {
     description = "Search and browse public DramaFren short-drama listings"
