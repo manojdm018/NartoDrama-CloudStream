@@ -1,4 +1,4 @@
-package com.manojdm018.nartodrama
+package com.manojdm018.dramafren
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*

@@ -1,49 +1,43 @@
-# Narto Drama + DramaFren for CloudStream
+# NartoDrama and DramaFren — separate CloudStream extensions
 
-A CloudStream plugin with two independent providers: Narto Drama and DramaFren. Each provider keeps its own search results, series pages, and episode links.
+This repository builds **two independent CloudStream plugins**. They are not bundled into one extension:
 
-## Features in this starter
+- **NartoDrama** — its own `.cs3` package and repository.
+- **DramaFren** — its own `.cs3` package and repository, using https://dramafren.org/.
 
-- Searches and browses Narto Drama's public catalogue.
-- Searches and browses DramaFren's public series pages as a separate provider.
-- Reads available series details and episode links from each site's public HTML.
-- Attempts to hand public HTML5 video sources or embeds to CloudStream's normal player/extractors.
+Each plugin has its own provider registration, search, catalogue, series details, and episode links. DramaFren uses standard CloudStream extractors for public player embeds. Playback still needs testing on a real CloudStream installation because embedded servers can change.
 
-**Playback is not yet verified.** Both sites may use embedded or dynamically loaded playback, so the provider may need adjustments after the first build and real-device test. The extension will not invent stream URLs or bypass login, paid access, DRM, or access restrictions.
+## Install NartoDrama
 
-## Build it (no PC required)
+Add this repository in CloudStream under **Extensions → Add repository**:
 
-1. Open the **Actions** tab in this repository.
-2. Select **Build NartoDrama and DramaFren CloudStream plugin**.
-3. Tap **Run workflow** (or push a commit to `main` to trigger it automatically).
-4. Open the finished run and download the `NartoDrama-DramaFren-cs3-plugin` artifact.
-5. Extract the ZIP and install the `.cs3` file in CloudStream if your CloudStream version supports local plugin installation.
+```
+https://raw.githubusercontent.com/manojdm018/NartoDrama-CloudStream/builds/repo.json
+```
 
-The workflow builds the extension using the CloudStream plugin tools. It also publishes a `builds` branch intended to work as a CloudStream repository.
+## Install DramaFren separately
 
-## Install from CloudStream
+Add this second repository in CloudStream:
 
-After the latest **Build NartoDrama and DramaFren CloudStream plugin** workflow finishes successfully:
+```
+https://raw.githubusercontent.com/manojdm018/NartoDrama-CloudStream/dramafren-builds/repo.json
+```
 
-1. Open CloudStream and go to **Extensions**.
-2. Find the option to add an extension repository.
-3. Paste this repository manifest URL:
+The two URLs list different plugins. Installing DramaFren does not install NartoDrama, and installing NartoDrama does not install DramaFren.
 
-   `https://raw.githubusercontent.com/manojdm018/NartoDrama-CloudStream/builds/repo.json`
+## Build
 
-4. Refresh repositories and install the extension and choose **Narto Drama** or **DramaFren** as separate providers.
+GitHub Actions builds both modules separately and publishes their individual packages. Pull-request builds compile the packages but do not publish either repository branch. The build artifact contains both `.cs3` files for manual installation if needed.
 
-If the repository manifest is not available yet, open the **Actions** tab and check the latest build. You can also download the `NartoDrama-DramaFren-cs3-plugin` artifact from a successful run and extract the `.cs3` file instead.
+## Content preferences
 
-**Important:** A successful build only confirms the plugin compiles. Searching, episode listing, and especially video playback must still be tested against the live Narto Drama website; its player may use dynamically loaded streams that this initial version cannot see.
+Both providers filter explicit BL and common female-lead metadata signals. This is a metadata-based filter, so a title may still need manual review if the site does not publish reliable genre or lead information. Custom in-detail SUB/DUB toggles are not supported by the standard CloudStream plugin interface; a paired version must also exist on the source site.
 
 ## Sources
 
 - Narto Drama: https://nartodrama.com/
 - DramaFren: https://dramafren.org/
 - CloudStream: https://github.com/recloudstream/cloudstream
-- Plugin template: https://github.com/cloudstream3/plugin-template
+- CloudStream extensions template: https://github.com/recloudstream/extensions
 
-## Safety and privacy
-
-Use only public pages and playback sources you are authorized to access. Never commit passwords, cookies, session tokens, or personal account data.
+Use only public pages and playback sources you are authorized to access. Do not commit cookies, tokens, or personal account data.

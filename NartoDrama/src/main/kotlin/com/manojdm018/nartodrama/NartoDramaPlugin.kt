@@ -8,6 +8,5 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class NartoDramaPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(NartoDramaProvider())
-        registerMainAPI(DramaFrenProvider())
     }
 }

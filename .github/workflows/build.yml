@@ -1,4 +1,4 @@
-name: Build NartoDrama and DramaFren CloudStream plugin
+name: Build NartoDrama and DramaFren CloudStream extensions
 
 on:
   push:
@@ -28,12 +28,12 @@ jobs:
           ref: cf16b3b45cda911a36ddca69f9acbe4763c6a4b1
           path: build-project
 
-      - name: Keep the NartoDrama module (registers independent Narto Drama and DramaFren providers)
+      - name: Copy the two independent extension modules
         shell: bash
         run: |
-          find build-project -mindepth 1 -maxdepth 1 -type d \
-            ! -name ".git" ! -name "gradle" -exec rm -rf {} +
+          find build-project -mindepth 1 -maxdepth 1 -type d ! -name ".git" ! -name "gradle" -exec rm -rf {} +
           cp -R source/NartoDrama build-project/NartoDrama
+          cp -R source/DramaFren build-project/DramaFren
 
       - name: Checkout CloudStream Gradle plugin source
         uses: actions/checkout@v4
@@ -57,8 +57,6 @@ jobs:
           plugin_build.write_text(plugin_text, encoding="utf-8")
 
           # The ADB deploy task is not needed for GitHub Actions builds.
-          # Replace its implementation so the Gradle plugin can build without
-          # downloading JADB from JitPack.
           adb_task = Path(
               "gradle-plugin/src/main/kotlin/com/lagradost/cloudstream3/gradle/tasks/DeployWithAdbTask.kt"
           )
@@ -108,48 +106,119 @@ jobs:
         with:
           packages: platform-tools platforms;android-35 build-tools;35.0.0
 
-      - name: Build plugin
+      - name: Build both extensions
         working-directory: build-project
         run: |
           chmod +x gradlew
-          ./gradlew NartoDrama:make makePluginsJson
+          ./gradlew NartoDrama:make DramaFren:make makePluginsJson
 
-      - name: Publish CloudStream repository branch
+      - name: Prepare separate CloudStream repositories
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          plugins_file = Path("build-project/build/plugins.json")
+          all_plugins = json.loads(plugins_file.read_text(encoding="utf-8"))
+
+          configs = [
+              ("NartoDrama", "builds", "Narto Drama",
+               "CloudStream extension for Narto Drama"),
+              ("DramaFren", "dramafren-builds", "DramaFren",
+               "Independent CloudStream extension for DramaFren"),
+          ]
+
+          for module, branch, repo_name, description in configs:
+              matches = [
+                  item for item in all_plugins
+                  if item.get("internalName") == module or item.get("name") == module
+              ]
+              if len(matches) != 1:
+                  raise SystemExit(
+                      f"Expected exactly one plugin entry for {module}; found {len(matches)}"
+                  )
+
+              item = dict(matches[0])
+              item["url"] = f"https://raw.githubusercontent.com/{repo}/{branch}/{module}.cs3"
+
+              build_dir = Path(f"build-project/{module}/build")
+              binaries = list(build_dir.glob("*.cs3"))
+              if len(binaries) != 1:
+                  raise SystemExit(
+                      f"Expected exactly one .cs3 package for {module}; found {len(binaries)}"
+                  )
+
+              dest = Path(f"publish-{module}")
+              if dest.exists():
+                  shutil.rmtree(dest)
+              dest.mkdir()
+              shutil.copy2(binaries[0], dest / f"{module}.cs3")
+              (dest / "plugins.json").write_text(
+              json.dumps([item], indent=4) + "\n",
+                  encoding="utf-8"
+              )
+              manifest = {
+                  "name": repo_name,
+                  "description": description,
+                  "manifestVersion": 1,
+                  "pluginLists": [
+                      f"https://raw.githubusercontent.com/{repo}/{branch}/plugins.json"
+                  ],
+              }
+              (dest / "repo.json").write_text(
+                  json.dumps(manifest, indent=2) + "\n",
+                  encoding="utf-8"
+              )
+          PY
+
+      - name: Publish NartoDrama repository (independent)
         if: github.event_name != 'pull_request'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p publish
-          cp build-project/NartoDrama/build/*.cs3 publish/
-          cp build-project/build/plugins.json publish/
-          cat > publish/repo.json <<EOF
-          {
-            "name": "Narto Drama + DramaFren",
-            "description": "CloudStream extension repository with independent Narto Drama and DramaFren providers",
-            "manifestVersion": 1,
-            "pluginLists": [
-              "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/builds/plugins.json"
-            ]
-          }
-          EOF
-          cd publish
+          cd publish-NartoDrama
           git init
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
           git add .
-          git commit -m "Build ${GITHUB_SHA}"
+          git commit -m "Publish NartoDrama build ${GITHUB_SHA}"
           git branch -M builds
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
           auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
           git -c "http.extraheader=AUTHORIZATION: basic ${auth}" push --force origin builds
 
-      - name: Upload CloudStream plugin
+      - name: Publish DramaFren repository (independent)
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd publish-DramaFren
+          git init
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add .
+          git commit -m "Publish DramaFren build ${GITHUB_SHA}"
+          git branch -M dramafren-builds
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
+          git -c "http.extraheader=AUTHORIZATION: basic ${auth}" push --force origin dramafren-builds
+
+      - name: Upload both independent plugins
         uses: actions/upload-artifact@v4
         with:
-          name: NartoDrama-DramaFren-cs3-plugin
+          name: NartoDrama-and-DramaFren-separate-plugins
           path: |
             build-project/NartoDrama/build/*.cs3
+            build-project/DramaFren/build/*.cs3
             build-project/build/plugins.json
           if-no-files-found: error
           retention-days: 14
