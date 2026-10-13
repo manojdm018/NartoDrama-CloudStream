@@ -119,24 +119,24 @@ class NartoDramaProvider : MainAPI() {
         "tl-PH" to "Filipino", "ms-MY" to "Malay", "hi-IN" to "Hindi",
         "ta-IN" to "Tamil", "te-IN" to "Telugu", "bn-BD" to "Bengali", "pl-PL" to "Polish"
     )
-    // Keep CloudStream's built-in page picker short. Individual categories are grouped
-    // as vertically scrollable rows within these five browse pages.
+    // CloudStream owns the browse UI, so use a small page picker and put the
+    // genres/story types into vertically scrollable catalog rows instead of
+    // requiring users to pick a short-drama source app first.
     private val browsePages = listOf(
         ("$mainUrl/?csbrowse=home") to "For You",
         ("$mainUrl/?csbrowse=stories") to "Story Types",
         ("$mainUrl/?csbrowse=genres") to "Genres",
-        ("$mainUrl/?csbrowse=languages") to "Languages",
-        ("$mainUrl/?csbrowse=sources") to "Source Apps"
+        ("$mainUrl/?csbrowse=languages") to "Languages"
     )
     override val mainPage = mainPageOf(*browsePages.toTypedArray())
 
     private val episodePath = Regex("""/detail/watch/([^/?]+)/?(\d+)?""")
     private val blPattern = Regex(
-        """\b(?:BL|boys['’ ]+love|danmei|yaoi|shounen[- ]?ai|male[- ]male romance)\b""",
+        """\b(?:BL|boys[-'’ ]+love|danmei|yaoi|shounen[-_ ]?ai|male[-_ ]male romance)\b""",
         RegexOption.IGNORE_CASE
     )
     private val femaleLeadPattern = Regex(
-        """\b(?:strong female lead|female[- ]led|female lead|female protagonist|female growth|heiress|villainess|princess|duchess|empress|queen|boss lady|girlboss|girl boss|independent woman|female magistrate|lady magistrate|female general|her revenge|sister['’]s revenge|the female lead|girl power|miss\s+[a-z]{2,})\b""",
+        """\b(?:strong[-_ ]female[-_ ]lead|female[-_ ]led|female[-_ ]lead|female[-_ ]protagonist|female[-_ ]growth|heiress|villainess|princess|duchess|empress|queen|boss[-_ ]lady|girlboss|girl boss|independent[-_ ]woman|female[-_ ]magistrate|lady[-_ ]magistrate|female[-_ ]general|her[-_ ]revenge|sister['’]s[-_ ]revenge|the female lead|girl power|miss\s+[a-z]{2,})\b""",
         RegexOption.IGNORE_CASE
     )
 
