@@ -83,7 +83,7 @@ jobs:
               '        cloudstream("com.lagradost:cloudstream3:pre-release")'
           )
           root_text = root_text.replace(
-              '    repositories {\n        mavenLocal()\n        google()',
+              '    repositories {\n        google()',
               '    repositories {\n        mavenLocal()\n        google()',
               1
           )
