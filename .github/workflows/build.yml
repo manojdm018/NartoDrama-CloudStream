@@ -1,4 +1,4 @@
-name: Build NartoDrama CloudStream plugin
+name: Build NartoDrama and DramaFren CloudStream plugin
 
 on:
   push:
@@ -26,7 +26,7 @@ jobs:
           ref: cf16b3b45cda911a36ddca69f9acbe4763c6a4b1
           path: build-project
 
-      - name: Keep only the NartoDrama module
+      - name: Keep the NartoDrama module (registers independent Narto Drama and DramaFren providers)
         shell: bash
         run: |
           find build-project -mindepth 1 -maxdepth 1 -type d \
@@ -122,8 +122,8 @@ jobs:
           cp build-project/build/plugins.json publish/
           cat > publish/repo.json <<EOF
           {
-            "name": "Narto Drama",
-            "description": "CloudStream extension repository for Narto Drama",
+            "name": "Narto Drama + DramaFren",
+            "description": "CloudStream extension repository with independent Narto Drama and DramaFren providers",
             "manifestVersion": 1,
             "pluginLists": [
               "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/builds/plugins.json"
@@ -144,7 +144,7 @@ jobs:
       - name: Upload CloudStream plugin
         uses: actions/upload-artifact@v4
         with:
-          name: NartoDrama-cs3-plugin
+          name: NartoDrama-DramaFren-cs3-plugin
           path: |
             build-project/NartoDrama/build/*.cs3
             build-project/build/plugins.json
