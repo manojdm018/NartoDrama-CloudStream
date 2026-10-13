@@ -361,7 +361,7 @@ class NartoDramaProvider : MainAPI() {
         "System & Superpowers" to Regex("""(?i)\b(?:system|superpowers?|awaken\w*|level[\s-]*up|skill tree|quest system|powers? unlocked|chosen one|cultivation system)\b|系统|觉醒"""),
         "CEO & Billionaire" to Regex("""(?i)\b(?:ceo|billionaire|millionaire|tycoon|chairman|company heir|wealthy heir|heir to the|richest man|richest woman)\b"""),
         "Romance" to Regex("""(?i)\b(?:romance|romantic|love|lover|marriage|married|wife|husband|bride|wedding|dating|contract marriage|flash marriage|fianc[eé])\b|爱情|恋爱|婚姻"""),
-        "Male Lead" to Regex("""(?i)(?:#|\\b)(?:male lead|male protagonist|male[- ]led|male main character)\b|男频|男主"""),
+        "Male Lead" to Regex("""(?i)(?:#|\b)(?:male lead|male protagonist|male[- ]led|male main character)\b|男频|男主"""),
         "Fantasy" to Regex("""(?i)\b(?:fantasy|magic|magical|dragon|demon|immortal|cultivation|werewolf|vampire|alpha king|supernatural|otherworld|realm|mythical)\b|玄幻|修仙"""),
         "Action" to Regex("""(?i)\b(?:action|fight\w*|battle\w*|martial arts|warrior|assassin|combat|soldier|weapon|warfare|tournament)\b"""),
         "Thriller & Mystery" to Regex("""(?i)\b(?:thriller|mystery|murder|investigation|detective|conspiracy|serial killer|mysterious|suspense)\b"""),
@@ -396,7 +396,7 @@ class NartoDramaProvider : MainAPI() {
             .toMutableList()
 
         val hasMaleLead = Regex(
-            """(?i)(?:#|\\b)(?:male lead|male protagonist|male[- ]led|male main character)\b|男频|男主"""
+            """(?i)(?:#|\b)(?:male lead|male protagonist|male[- ]led|male main character)\b|男频|男主"""
         ).containsMatchIn(signals)
         val hasRomance = synopsisCategoryPatterns.first { it.first == "Romance" }.second
             .containsMatchIn(signals)
