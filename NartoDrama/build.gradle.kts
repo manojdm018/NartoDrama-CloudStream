@@ -1,7 +1,7 @@
-version = 16
+version = 17
 
 cloudstream {
-    description = "Search and browse public Narto Drama listings"
+    description = "Independent Narto Drama and DramaFren short-drama catalogues"
     authors = listOf("manojdm018")
     status = 3 // Beta: playback has not yet been verified.
     tvTypes = listOf("TvSeries")
