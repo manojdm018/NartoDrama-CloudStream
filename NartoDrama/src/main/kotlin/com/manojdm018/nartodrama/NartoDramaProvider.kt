@@ -140,6 +140,12 @@ class NartoDramaProvider : MainAPI() {
         RegexOption.IGNORE_CASE
     )
 
+    // The source also uses tag-only signals like #female and #女频, without
+    // spelling out "female lead" in the title or synopsis.
+    private val femaleLeadTagPattern = Regex(
+        """(?i)(?:#\s*(?:female|heroine|strong[-_ ]female[-_ ]lead|female[-_ ]lead)\b|["']\s*(?:female|heroine|strong[-_ ]female[-_ ]lead|female[-_ ]lead)\s*["']|女频|女主)"""
+    )
+
     /**
      * Exclude titles whose own title/card metadata explicitly identifies BL
      * or common female-led story tags. This is a conservative metadata filter;
@@ -150,7 +156,8 @@ class NartoDramaProvider : MainAPI() {
             .replace(Regex("""<[^>]+>"""), " ")
             .replace(Regex("""\s+"""), " ")
         return !blPattern.containsMatchIn(signals) &&
-            !femaleLeadPattern.containsMatchIn(signals)
+            !femaleLeadPattern.containsMatchIn(signals) &&
+            !femaleLeadTagPattern.containsMatchIn(signals)
     }
 
     // Narto Drama marks dubbed audio in titles using forms such as
