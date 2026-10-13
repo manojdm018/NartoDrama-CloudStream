@@ -32,7 +32,6 @@ jobs:
         shell: bash
         run: |
           find build-project -mindepth 1 -maxdepth 1 -type d ! -name ".git" ! -name "gradle" -exec rm -rf {} +
-            ! -name ".git" ! -name "gradle" -exec rm -rf {} +
           cp -R source/NartoDrama build-project/NartoDrama
           cp -R source/DramaFren build-project/DramaFren
 
