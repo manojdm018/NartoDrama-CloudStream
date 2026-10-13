@@ -73,15 +73,47 @@ class NartoDramaProvider : MainAPI() {
         "true-love" to "True Love", "costume-drama" to "Costume Drama", "western" to "Western"
     )
     private val tagChoices = listOf(
-        "hot" to "Hot", "counterattack" to "Counterattack", "revenge" to "Revenge",
-        "ceo" to "CEO", "urban" to "Urban", "modern" to "Modern",
-        "strong-female-lead" to "Strong Female Lead", "time-travel" to "Time Travel",
-        "hidden-identity" to "Hidden Identity", "rebirth" to "Rebirth",
-        "modern-romance" to "Modern Romance", "male-lead" to "Male Lead",
-        "underdog-rise" to "Underdog Rise", "billionaire" to "Billionaire",
-        "werewolf" to "Werewolf", "system" to "System", "second-chance" to "Second Chance",
-        "karma-payback" to "Karma Payback", "love-after-marriage" to "Love After Marriage",
-        "family" to "Family"
+        "rebirth" to "Reborn & Rebirth",
+        "time-travel" to "Time Travel",
+        "revenge" to "Revenge",
+        "hidden-identity" to "Hidden Identity",
+        "zero-to-hero" to "Zero to Hero",
+        "second-chance" to "Second Chance",
+        "counterattack" to "Counterattack",
+        "underdog-rise" to "Underdog Rise",
+        "strong-female-lead" to "Strong Female Lead",
+        "system" to "System & Superpowers",
+        "ceo" to "CEO",
+        "billionaire" to "Billionaire",
+        "boss-lady" to "Boss Lady",
+        "high-society" to "High Society",
+        "romantic-tension" to "Romantic Tension",
+        "modern-romance" to "Modern Romance",
+        "betrayal" to "Betrayal",
+        "the-comeback" to "The Comeback",
+        "love-after-marriage" to "Love After Marriage",
+        "fated-lovers" to "Fated Lovers",
+        "werewolf" to "Werewolf",
+        "cute-kids" to "Cute Kids",
+        "mafia" to "Mafia",
+        "youth" to "Youth",
+        "ancient" to "Ancient / Costume",
+        "female-growth" to "Female Growth",
+        "karma-payback" to "Karma Payback",
+        "playing-dumb" to "Playing Dumb",
+        "secret-identity" to "Secret Identity",
+        "heiress" to "Heiress",
+        "redemption" to "Redemption",
+        "wish-fulfillment" to "Wish Fulfillment",
+        "forbidden-love" to "Forbidden Love",
+        "the-chosen-one" to "The Chosen One",
+        "royalty" to "Royalty",
+        "regret" to "Regret",
+        "sweet-love" to "Sweet Love",
+        "all-too-late" to "All Too Late",
+        "independent-woman" to "Independent Woman",
+        "love-triangle" to "Love Triangle",
+        "fantasy-romance" to "Fantasy Romance"
     )
     private val languageChoices = listOf(
         "en-US" to "English", "id-ID" to "Bahasa Indonesia", "ja-JP" to "Japanese",
@@ -93,15 +125,16 @@ class NartoDramaProvider : MainAPI() {
         "ta-IN" to "Tamil", "te-IN" to "Telugu", "bn-BD" to "Bengali", "pl-PL" to "Polish"
     )
     private val browsePages =
-        providerChoices.map { ("$mainUrl/?csbrowse=provider:" + it.first) to (it.second + " Dramas") } +
+        listOf(("$mainUrl/?csbrowse=home") to "For You") +
+        tagChoices.map { ("$mainUrl/?csbrowse=tag:" + it.first) to ("Story: " + it.second) } +
+        genreChoices.map { ("$mainUrl/?csbrowse=genre:" + it.first) to ("Genre: " + it.second) } +
+        languageChoices.map { ("$mainUrl/?csbrowse=lang:" + it.first) to ("Language: " + it.second) } +
         listOf(
             ("$mainUrl/?csbrowse=page:featured") to "Featured",
             ("$mainUrl/?csbrowse=page:movies") to "Movies & Series",
             ("$mainUrl/?csbrowse=page:anime") to "Anime"
         ) +
-        genreChoices.map { ("$mainUrl/?csbrowse=genre:" + it.first) to ("Genre: " + it.second) } +
-        tagChoices.map { ("$mainUrl/?csbrowse=tag:" + it.first) to ("Tag: " + it.second) } +
-        languageChoices.map { ("$mainUrl/?csbrowse=lang:" + it.first) to ("Language: " + it.second) }
+        providerChoices.map { ("$mainUrl/?csbrowse=provider:" + it.first) to ("Source App: " + it.second) }
     override val mainPage = mainPageOf(*browsePages.toTypedArray())
 
     private val episodePath = Regex("""/detail/watch/([^/?]+)/?(\d+)?""")
@@ -113,6 +146,7 @@ class NartoDramaProvider : MainAPI() {
             .let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }
             .ifBlank { "provider:anyreel" }
         val rows = when {
+            key == "home" -> fetchHomeRows(page)
             key.startsWith("provider:") -> {
                 val provider = key.substringAfter("provider:")
                 val label = providerChoices.firstOrNull { it.first == provider }?.second ?: provider
@@ -131,9 +165,52 @@ class NartoDramaProvider : MainAPI() {
                 val results = doc?.let { parseCards(it).ifEmpty { parseJsonLdCards(it) } } ?: emptyList()
                 if (results.isEmpty()) emptyList() else listOf(HomePageList(request.name, results))
             }
-            else -> fetchProviderSections("anyreel", page, "en-US", "AnyReel")
+            else -> fetchHomeRows(page)
         }
         return newHomePageResponse(rows, hasNext = rows.isNotEmpty())
+    }
+
+    private suspend fun fetchHomeRows(page: Int): List<HomePageList> {
+        val rows = mutableListOf<HomePageList>()
+
+        // A popular row first, followed by official tag and genre pages from Narto Drama.
+        rows.addAll(fetchProviderSections("anyreel", page, "en-US", "Popular"))
+
+        val storyRows = listOf(
+            "rebirth" to "Reborn & Rebirth",
+            "time-travel" to "Time Travel",
+            "revenge" to "Revenge",
+            "hidden-identity" to "Hidden Identity",
+            "zero-to-hero" to "Zero to Hero",
+            "second-chance" to "Second Chance"
+        )
+        for ((slug, title) in storyRows) {
+            val results = fetchCatalogPage("/tag/" + slug, page, "en-US")
+            if (results.isNotEmpty()) rows.add(HomePageList(title, results))
+        }
+
+        val genreRows = listOf(
+            "romance" to "Romance",
+            "fantasy" to "Fantasy",
+            "action" to "Action"
+        )
+        for ((slug, title) in genreRows) {
+            val results = fetchCatalogPage("/genre/" + slug, page, "en-US")
+            if (results.isNotEmpty()) rows.add(HomePageList(title, results))
+        }
+
+        return rows
+    }
+
+    private suspend fun fetchCatalogPage(path: String, page: Int, locale: String): List<SearchResponse> {
+        val separator = if (path.contains("?")) "&" else "?"
+        val url = mainUrl + path + separator +
+            "lang=" + URLEncoder.encode(locale, "UTF-8") + "&page=" + page
+        val document = runCatching {
+            app.get(url, headers = requestHeaders(mainUrl + "/")).document
+        }.getOrNull() ?: return emptyList()
+
+        return deduplicateResults(parseCards(document) + parseJsonLdCards(document))
     }
 
     private fun browsePath(key: String): String? = when {
