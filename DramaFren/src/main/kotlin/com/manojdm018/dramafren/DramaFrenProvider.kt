@@ -329,7 +329,7 @@ class DramaFrenProvider : MainAPI() {
                     embed,
                     referer,
                     { extractedSubtitles.add(it) },
-                    { extractedLinks.add(it) }
+                    { if (it.url.isNotBlank()) extractedLinks.add(it) }
                 )
             }
             extractedSubtitles.forEach(subtitleCallback)
