@@ -615,7 +615,7 @@ class NartoDramaProvider : MainAPI() {
             }.filter { hasUsablePoster(it) && !isDubbedTitle(it.name) }
                 .distinctBy { it.url }
 
-            if (cleaned.isEmpty()) null else HomePageList(row.name, cleaned, row.isHorizontalImages)
+            if (cleaned.isEmpty()) null else HomePageList(row.name, cleaned)
         }.toMutableList()
 
         // Merge the synopsis-driven categories into the same row names already on
