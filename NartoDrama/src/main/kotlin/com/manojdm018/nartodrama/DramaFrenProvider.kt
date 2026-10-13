@@ -198,10 +198,18 @@ class DramaFrenProvider : MainAPI() {
 
         val routeSlug = seriesPath.find(resolvedUrl)?.groupValues?.getOrNull(1)
             ?: watchPath.find(resolvedUrl)?.groupValues?.getOrNull(1)
-        val seriesUrl = document.selectFirst("a[href*='/series/']")?.absUrl("href")
-            ?.takeIf { it.startsWith(mainUrl, ignoreCase = true) }
-            ?: routeSlug?.let { "$mainUrl/series/$it/" }
-            ?: resolvedUrl
+        val seriesUrl = if (seriesPath.containsMatchIn(resolvedUrl)) {
+            resolvedUrl.substringBefore("?").substringBefore("#")
+        } else {
+            routeSlug?.let { "$mainUrl/series/$it/" }
+                ?: document.select("a[href*='/series/']")
+                    .map { it.absUrl("href") }
+                    .firstOrNull {
+                        val path = runCatching { URI(it).path.orEmpty().trimEnd('/') }.getOrDefault("")
+                        seriesPath.containsMatchIn(path) && it.startsWith(mainUrl, ignoreCase = true)
+                    }
+                ?: resolvedUrl
+        }
 
         val episodeCandidates = parseEpisodeLinks(document, resolvedUrl)
         val episodes = episodeCandidates.map { candidate ->
