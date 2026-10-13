@@ -415,6 +415,99 @@ class NartoDramaProvider : MainAPI() {
         "Marriage & Divorce" to Regex("""(?i)\b(?:marriage|married|wedding|divorce|divorced|fianc[eé]|bride|groom|ex[- ]husband|ex[- ]wife|contract wife)\b""")
     )
 
+    // Only explicit source audio/original-language fields qualify for English Shorts.
+    // The page UI locale and translated English title are deliberately not used.
+    private val explicitAudioLanguageKeys = listOf(
+        "original_audio_language", "originalAudioLanguage", "original_language",
+        "originalLanguage", "audio_language", "audioLanguage", "audio_lang",
+        "audioLang", "audio_track_language", "audioTrackLanguage",
+        "spoken_language", "spokenLanguage", "dialogue_language",
+        "dialogueLanguage", "native_audio_language", "nativeAudioLanguage",
+        "language_of_audio", "languageOfAudio", "audio_locale", "audioLocale",
+        "source_language", "sourceLanguage"
+    )
+
+    private val englishOriginalPhrasePattern = Regex(
+        """(?i)\b(?:english\s+(?:original\s+)?audio|original\s+audio\s+(?:is\s+)?english|original\s+language\s*[:=-]\s*english|english\s+original\s+(?:audio|language))\b"""
+    )
+
+    private fun isEnglishLanguageValue(raw: String): Boolean {
+        val value = raw.trim().lowercase(Locale.ROOT)
+            .replace('_', '-')
+            .substringBefore(';')
+            .substringBefore(',')
+            .trim()
+        return value in setOf(
+            "en", "eng", "english", "en-us", "en-gb", "en-au", "en-ca",
+            "en-nz", "en-ie", "en-za", "en-in", "en-ph", "en-001",
+            "english (original)", "original english"
+        )
+    }
+
+    private fun valueStrings(value: Any?): List<String> = when (value) {
+        is String -> listOf(value)
+        is JSONObject -> listOf("language", "name", "label", "code", "locale", "value")
+            .mapNotNull { key ->
+                value.opt(key)?.takeUnless { it == JSONObject.NULL }?.toString()
+            }
+        is JSONArray -> (0 until value.length()).flatMap { index -> valueStrings(value.opt(index)) }
+        else -> emptyList()
+    }
+
+    private fun explicitAudioLanguageFromItem(item: JSONObject): String? {
+        for (key in explicitAudioLanguageKeys) {
+            val raw = item.opt(key) ?: continue
+            if (raw == JSONObject.NULL) continue
+            if (valueStrings(raw).any { isEnglishLanguageValue(it) }) return "English"
+        }
+
+        val releaseLabels = listOf(
+            item.optString("audio_label"),
+            item.optString("audioLabel"),
+            item.optString("original_audio"),
+            item.optString("originalAudio"),
+            item.optString("release_label"),
+            item.optString("releaseLabel"),
+            item.optString("version_label"),
+            item.optString("versionLabel")
+        ).joinToString(" ")
+        return if (englishOriginalPhrasePattern.containsMatchIn(releaseLabels)) "English" else null
+    }
+
+    private fun explicitAudioLanguageFromDocument(document: Document): String? {
+        val audioMeta = document.select("meta[name], meta[property]").any { meta ->
+            val key = (meta.attr("name") + " " + meta.attr("property"))
+                .lowercase(Locale.ROOT)
+            val audioKey = explicitAudioLanguageKeys.any { key.contains(it.lowercase(Locale.ROOT)) }
+            audioKey && isEnglishLanguageValue(meta.attr("content"))
+        }
+        if (audioMeta) return "English"
+
+        val languageAttributes = listOf(
+            "data-original-audio-language", "data-original-language",
+            "data-audio-language", "data-audio-lang", "data-audio-track-language",
+            "data-spoken-language", "data-dialogue-language"
+        )
+        for (attribute in languageAttributes) {
+            if (document.select("[$attribute]").any { isEnglishLanguageValue(it.attr(attribute)) }) {
+                return "English"
+            }
+        }
+
+        // Inspect structured page data only for explicit audio/original-language keys.
+        val englishValue = """(?:en|eng|english|en[-_]us|en[-_]gb|en[-_]au|en[-_]ca|en[-_]nz|en[-_]in)"""
+        val htmlLanguagePattern = Regex(
+            """(?i)["'](?:original_audio_language|originalAudioLanguage|original_language|originalLanguage|audio_language|audioLanguage|audio_lang|audioLang|audio_track_language|audioTrackLanguage|spoken_language|spokenLanguage|dialogue_language|dialogueLanguage|native_audio_language|nativeAudioLanguage|language_of_audio|languageOfAudio|audio_locale|audioLocale|source_language|sourceLanguage)["']\s*:\s*["']""" + englishValue + """["']"""
+        )
+        if (htmlLanguagePattern.containsMatchIn(document.html())) return "English"
+
+        val explicitLabelText = document.select(
+            ".audio-language, .original-language, [class*=audio-language], [class*=original-audio]"
+        ).text()
+        if (englishOriginalPhrasePattern.containsMatchIn(explicitLabelText)) return "English"
+        return null
+    }
+
     private fun catalogueMetadata(item: JSONObject): String {
         val likelyTextFields = listOf(
             "title", "name", "description", "synopsis", "plot", "summary",
@@ -451,10 +544,12 @@ class NartoDramaProvider : MainAPI() {
     private data class SynopsisDetails(
         val synopsis: String,
         val tags: List<String>,
-        val poster: String?
+        val poster: String?,
+        val originalAudioLanguage: String?
     )
 
     private val synopsisDetailCache = mutableMapOf<String, SynopsisDetails>()
+    private val originalAudioLanguageByUrl = mutableMapOf<String, String>()
     private val synopsisAttempted = mutableSetOf<String>()
     private val maxSynopsisItemsPerHome = 120
     private val maxNewSynopsisReadsPerHome = 40
@@ -542,7 +637,9 @@ class NartoDramaProvider : MainAPI() {
             document.selectFirst("img[alt]")?.absUrl("src").orEmpty()
         ).mapNotNull { normalizedImageUrl(it) }.firstOrNull()
 
-        val details = SynopsisDetails(synopsis, tags, poster)
+        val audioLanguage = explicitAudioLanguageFromDocument(document)
+            ?: synchronized(originalAudioLanguageByUrl) { originalAudioLanguageByUrl[item.url] }
+        val details = SynopsisDetails(synopsis, tags, poster, audioLanguage)
         synchronized(synopsisDetailCache) {
             if (synopsisDetailCache.size >= 700) {
                 synopsisDetailCache.clear()
@@ -601,6 +698,13 @@ class NartoDramaProvider : MainAPI() {
             val tags = details?.tags.orEmpty()
             val signalText = listOf(item.name, tags.joinToString(" "), details?.synopsis.orEmpty())
                 .joinToString(" ")
+            val audioLanguage = details?.originalAudioLanguage
+                ?: synchronized(originalAudioLanguageByUrl) { originalAudioLanguageByUrl[url] }
+            if (audioLanguage == "English" && !isDubbedTitle(item.name) &&
+                !isDubbedRelease(item.name, tags.joinToString(" "))) {
+                val urls = categoryUrls.getOrPut("English Shorts") { linkedSetOf() }
+                if (urls.add(url)) categoryItems.getOrPut("English Shorts") { mutableListOf() }.add(item)
+            }
             // If the detail request succeeded, use its direct synopsis/tags to enforce
             // the user's existing BL/female-lead exclusions; on request failure, retain
             // the already-vetted listing card rather than emptying the home page.
@@ -751,8 +855,61 @@ class NartoDramaProvider : MainAPI() {
         return newHomePageResponse(finalRows, hasNext = finalRows.isNotEmpty())
     }
 
+    private suspend fun fetchEnglishOriginalShorts(page: Int): List<SearchResponse> {
+        val sourceProviders = listOf(
+            "anyreel", "netshort", "dramabox", "goodshort", "reelshort",
+            "shortmax", "dramawave", "moboreels", "flextv", "flexTV"
+        )
+        val results = linkedMapOf<String, SearchResponse>()
+        for (provider in sourceProviders) {
+            var json = requestProviderJson(provider, "en-US", includeTarget = false)
+            if (page > 1 && json != null) {
+                val sections = json.optJSONArray("sections")
+                val tabs = mutableListOf<Pair<String, Int>>()
+                if (sections != null) {
+                    for (index in 0 until sections.length()) {
+                        val key = sections.optJSONObject(index)?.optString("tab_key").orEmpty()
+                        if (key.isNotBlank()) tabs.add(key to page)
+                    }
+                }
+                if (tabs.isNotEmpty()) {
+                    requestProviderJson(provider, "en-US", tabs, includeTarget = false)
+                        ?.takeIf { hasItems(it) }
+                        ?.let { json = it }
+                }
+            }
+
+            val sections = json?.optJSONArray("sections") ?: continue
+            for (sectionIndex in 0 until sections.length()) {
+                val items = sections.optJSONObject(sectionIndex)?.optJSONArray("items") ?: continue
+                for (itemIndex in 0 until items.length()) {
+                    val sourceItem = items.optJSONObject(itemIndex) ?: continue
+                    if (explicitAudioLanguageFromItem(sourceItem) != "English") continue
+
+                    val parsed = parseApiItems(JSONArray().put(sourceItem)).firstOrNull() ?: continue
+                    if (isDubbedTitle(parsed.name) || isDubbedRelease(parsed.name, sourceItem)) continue
+                    synchronized(originalAudioLanguageByUrl) {
+                        originalAudioLanguageByUrl[parsed.url] = "English"
+                    }
+                    results.putIfAbsent(parsed.url, parsed)
+                    if (results.size >= 100) break
+                }
+                if (results.size >= 100) break
+            }
+            if (results.size >= 100) break
+        }
+        return results.values.toList()
+    }
+
     private suspend fun fetchHomeRows(page: Int): List<HomePageList> {
         val rows = mutableListOf<HomePageList>()
+
+        // English Shorts includes only source records that explicitly identify English
+        // as the original/audio language. UI locale and English subtitles do not qualify.
+        val englishOriginals = fetchEnglishOriginalShorts(page)
+        if (englishOriginals.isNotEmpty()) {
+            rows.add(HomePageList("English Shorts", englishOriginals))
+        }
 
         // Prefer Narto's un-targeted provider feed, then merge in cards from its
         // server-rendered Hot catalogue. These cards contain actual drama-detail URLs,
@@ -948,6 +1105,11 @@ class NartoDramaProvider : MainAPI() {
                 val sourceItem = items.optJSONObject(itemIndex) ?: continue
                 val parsed = parseApiItems(JSONArray().put(sourceItem))
                 val result = parsed.firstOrNull() ?: continue
+                explicitAudioLanguageFromItem(sourceItem)?.let { language ->
+                    synchronized(originalAudioLanguageByUrl) {
+                        originalAudioLanguageByUrl[result.url] = language
+                    }
+                }
                 if (seenUrls.add(result.url)) allResults.add(result)
 
                 if (includeMetadataCategoryRows) {
