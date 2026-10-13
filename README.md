@@ -9,7 +9,7 @@ A CloudStream plugin with two independent providers: Narto Drama and DramaFren. 
 - Reads available series details and episode links from each site's public HTML.
 - Attempts to hand public HTML5 video sources or embeds to CloudStream's normal player/extractors.
 
-**Playback is not yet verified.** Narto Drama appears to use dynamically loaded playback, so the provider may need adjustments after the first real build/test. The extension will not invent stream URLs or bypass login, paid access, DRM, or access restrictions.
+**Playback is not yet verified.** Both sites may use embedded or dynamically loaded playback, so the provider may need adjustments after the first build and real-device test. The extension will not invent stream URLs or bypass login, paid access, DRM, or access restrictions.
 
 ## Build it (no PC required)
 
@@ -23,7 +23,7 @@ The workflow builds the extension using the CloudStream plugin tools. It also pu
 
 ## Install from CloudStream
 
-After the latest **Build NartoDrama CloudStream plugin** workflow finishes successfully:
+After the latest **Build NartoDrama and DramaFren CloudStream plugin** workflow finishes successfully:
 
 1. Open CloudStream and go to **Extensions**.
 2. Find the option to add an extension repository.
@@ -33,13 +33,14 @@ After the latest **Build NartoDrama CloudStream plugin** workflow finishes succe
 
 4. Refresh repositories and install the extension and choose **Narto Drama** or **DramaFren** as separate providers.
 
-If the repository manifest is not available yet, open the **Actions** tab and check the latest build. You can also download the `NartoDrama-cs3-plugin` artifact from a successful run and extract the `.cs3` file instead.
+If the repository manifest is not available yet, open the **Actions** tab and check the latest build. You can also download the `NartoDrama-DramaFren-cs3-plugin` artifact from a successful run and extract the `.cs3` file instead.
 
 **Important:** A successful build only confirms the plugin compiles. Searching, episode listing, and especially video playback must still be tested against the live Narto Drama website; its player may use dynamically loaded streams that this initial version cannot see.
 
 ## Sources
 
 - Narto Drama: https://nartodrama.com/
+- DramaFren: https://dramafren.org/
 - CloudStream: https://github.com/recloudstream/cloudstream
 - Plugin template: https://github.com/cloudstream3/plugin-template
 
