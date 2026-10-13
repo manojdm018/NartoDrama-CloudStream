@@ -31,11 +31,11 @@ class DramaFrenProvider : MainAPI() {
     private val watchPath = Regex("""/watch/([^/?#]+)/?""", RegexOption.IGNORE_CASE)
 
     private val blPattern = Regex(
-        """\b(?:BL|boys['’ ]+love|danmei|yaoi|shounen[- ]?ai|male[- ]male romance)\b""",
+        """\b(?:BL|boys[-'’ ]+love|danmei|yaoi|shounen[-_ ]?ai|male[-_ ]male romance)\b""",
         RegexOption.IGNORE_CASE
     )
     private val femaleLeadPattern = Regex(
-        """\b(?:strong female lead|female[- ]led|female lead|female protagonist|female growth|heiress|villainess|princess|duchess|empress|queen|boss lady|girlboss|girl boss|independent woman|female magistrate|lady magistrate|female general|her revenge|sister['’]s revenge|the female lead|girl power|miss\s+[a-z]{2,})\b""",
+        """\b(?:strong[-_ ]female[-_ ]lead|female[-_ ]led|female[-_ ]lead|female[-_ ]protagonist|female[-_ ]growth|heiress|villainess|princess|duchess|empress|queen|boss[-_ ]lady|girlboss|girl boss|independent[-_ ]woman|female[-_ ]magistrate|lady[-_ ]magistrate|female[-_ ]general|her[-_ ]revenge|sister['’]s[-_ ]revenge|the female lead|girl power|miss\s+[a-z]{2,})\b""",
         RegexOption.IGNORE_CASE
     )
 
