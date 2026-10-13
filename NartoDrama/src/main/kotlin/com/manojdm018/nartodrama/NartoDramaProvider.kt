@@ -401,7 +401,18 @@ class NartoDramaProvider : MainAPI() {
         "Crime & Mafia" to Regex("""(?i)\b(?:mafia|gangster|mob boss|underworld|crime|criminal|cartel|hitman|organized crime)\b"""),
         "Ancient / Costume" to Regex("""(?i)\b(?:ancient|dynasty|emperor|empress|imperial|palace|royal|royalty|historical|costume drama|warlord|martial arts dynasty)\b|古代|皇帝|王朝"""),
         "Family Drama" to Regex("""(?i)\b(?:family|father|mother|parent\w*|child\w*|children|twins|baby|inheritance|family drama|adopted son|adopted daughter)\b"""),
-        "Comedy" to Regex("""(?i)\b(?:comedy|funny|hilarious|comic|comical|prank)\b""")
+        "Comedy" to Regex("""(?i)\b(?:comedy|funny|hilarious|comic|comical|prank)\b"""),
+        "Werewolf" to Regex("""(?i)\b(?:werewolf|wolf shifter|lycan|alpha mate|luna|pack leader)\b"""),
+        "Vampire" to Regex("""(?i)\b(?:vampire|vampires|bloodsucker|immortal bloodline)\b"""),
+        "Dragon & Mythology" to Regex("""(?i)\b(?:dragon|phoenix|olympus|mytholog\w*|deity|goddess|god king|dragon king)\b"""),
+        "Apocalypse & Survival" to Regex("""(?i)\b(?:apocalypse|zombie|survival|end of the world|doomsday|disaster|infinite space)\b"""),
+        "Sports & Competition" to Regex("""(?i)\b(?:athlete|soccer|football|basketball|champion|tournament|sports?|coach|team captain)\b"""),
+        "Medical & Healing" to Regex("""(?i)\b(?:doctor|surgeon|medical|healer|physician|hospital|miracle healer)\b"""),
+        "Police & Military" to Regex("""(?i)\b(?:police|officer|detective|soldier|commander|colonel|general|military|bodyguard)\b"""),
+        "Young Adult" to Regex("""(?i)\b(?:young adult|school|classmate|student|campus|college|high school|bully)\b"""),
+        "Forbidden Love" to Regex("""(?i)\b(?:forbidden love|forbidden affair|stepbrother|stepsister|affair|secret lover|love triangle)\b"""),
+        "Betrayal & Redemption" to Regex("""(?i)\b(?:betrayal|betrayed|redemption|forgiveness|cheat(?:s|ed|ing)?|unfaithful|infidelity)\b"""),
+        "Marriage & Divorce" to Regex("""(?i)\b(?:marriage|married|wedding|divorce|divorced|fianc[eé]|bride|groom|ex[- ]husband|ex[- ]wife|contract wife)\b""")
     )
 
     private fun catalogueMetadata(item: JSONObject): String {
@@ -435,6 +446,213 @@ class NartoDramaProvider : MainAPI() {
             .containsMatchIn(signals)
         if (hasMaleLead && hasRomance) categories.add("Male Lead Romance")
         return categories.distinct()
+    }
+
+    private data class SynopsisDetails(
+        val synopsis: String,
+        val tags: List<String>,
+        val poster: String?
+    )
+
+    private val synopsisDetailCache = mutableMapOf<String, SynopsisDetails>()
+    private val synopsisAttempted = mutableSetOf<String>()
+    private val maxSynopsisItemsPerHome = 120
+    private val maxNewSynopsisReadsPerHome = 40
+
+    private fun extractRelatedTags(document: Document): List<String> {
+        val output = linkedSetOf<String>()
+        for (anchor in document.select("a[href*='/tag/'], a[href*='/genre/']")) {
+            var parent: Element? = anchor
+            var relatedTagRegion = false
+            repeat(5) {
+                val current = parent ?: return@repeat
+                val label = current.text().trim()
+                if (label.startsWith("Related tags:", ignoreCase = true) &&
+                    label.length < 1200) {
+                    relatedTagRegion = true
+                }
+                parent = current.parent()
+            }
+            if (!relatedTagRegion) continue
+            val label = anchor.text().trim().trimStart('#', ' ', ':', '·')
+            if (label.isNotBlank() && label.length < 60) output.add(label)
+        }
+        return output.toList()
+    }
+
+    private fun synopsisCandidates(document: Document): List<String> {
+        val candidates = mutableListOf<String>()
+        listOf(
+            "meta[name=description]", "meta[property=og:description]",
+            "meta[name=twitter:description]"
+        ).forEach { selector ->
+            document.selectFirst(selector)?.attr("content")?.trim()
+                ?.takeIf { it.isNotBlank() }?.let { candidates.add(it) }
+        }
+        listOf(
+            "[itemprop=description]", ".synopsis", ".plot", ".storyline",
+            ".detail-description", ".movie-description", ".drama-description",
+            "#synopsis", "#plot", ".description"
+        ).forEach { selector ->
+            document.select(selector).forEach { node ->
+                node.text().trim().takeIf { it.length >= 60 }?.let { candidates.add(it) }
+            }
+        }
+        document.select("main p, article p, p").forEach { p ->
+            p.text().trim().takeIf { it.length >= 60 }?.let { candidates.add(it) }
+        }
+
+        return candidates
+            .map { it.replace(Regex("""\s+"""), " ").trim() }
+            .filter { it.length >= 60 && it.length <= 4500 }
+            .filterNot {
+                it.contains("Narto Drama is a short drama streaming platform", true) ||
+                    it.contains("log in to watch without ads", true) ||
+                    it.contains("you may like", true) ||
+                    it.contains("start watching episode", true) ||
+                    it.startsWith("watch ", true) && it.contains(" on Narto Drama ", true)
+            }
+            .map { candidate ->
+                candidate.replace(
+                    Regex("""(?i)^Synopsis\s+[^:]{1,140}:\s*"""),
+                    ""
+                ).trim()
+            }
+            .distinct()
+    }
+
+    private suspend fun inspectDramaSynopsis(item: SearchResponse): SynopsisDetails? {
+        synchronized(synopsisDetailCache) {
+            synopsisDetailCache[item.url]?.let { return it }
+            if (!synopsisAttempted.add(item.url)) return null
+        }
+
+        val document = runCatching {
+            app.get(item.url, headers = requestHeaders(mainUrl + "/")).document
+        }.getOrNull() ?: return null
+
+        val tags = extractRelatedTags(document)
+        val synopsis = synopsisCandidates(document)
+            .maxByOrNull { it.length }
+            ?.take(4500)
+            .orEmpty()
+        val poster = sequenceOf(
+            document.selectFirst("meta[property=og:image]")?.attr("content").orEmpty(),
+            document.selectFirst("meta[name=twitter:image]")?.attr("content").orEmpty(),
+            document.selectFirst("img[alt]")?.absUrl("src").orEmpty()
+        ).mapNotNull { normalizedImageUrl(it) }.firstOrNull()
+
+        val details = SynopsisDetails(synopsis, tags, poster)
+        synchronized(synopsisDetailCache) {
+            if (synopsisDetailCache.size >= 700) {
+                synopsisDetailCache.clear()
+                synopsisAttempted.clear()
+            }
+            synopsisDetailCache[item.url] = details
+        }
+        return details
+    }
+
+    private fun withPoster(item: SearchResponse, poster: String?): SearchResponse {
+        val actualPoster = normalizedImageUrl(item.posterUrl.orEmpty()) ?: poster
+        return newTvSeriesSearchResponse(item.name, item.url, TvType.TvSeries) {
+            posterUrl = actualPoster
+        }
+    }
+
+    private suspend fun categorizeHomeFromSynopses(rows: List<HomePageList>): List<HomePageList> {
+        val candidates = rows.flatMap { it.list }
+            .filter { isDetailWatchUrl(it.url) && !isDubbedTitle(it.name) }
+            .distinctBy { it.url }
+            .take(maxSynopsisItemsPerHome)
+
+        if (candidates.isEmpty()) return rows
+
+        // Read individual drama detail pages sequentially. The provider template
+        // doesn't include kotlinx-coroutines as a direct dependency, so don't use
+        // async/awaitAll here. Cache successful reads and inspect up to 40 new
+        // titles per refresh, choosing uninspected URLs so repeated home visits
+        // progressively classify the full 120-title candidate pool.
+        val pendingReads = synchronized(synopsisDetailCache) {
+            candidates.filter { item ->
+                !synopsisDetailCache.containsKey(item.url) &&
+                    !synopsisAttempted.contains(item.url)
+            }.take(maxNewSynopsisReadsPerHome)
+        }
+        for (item in pendingReads) {
+            runCatching { inspectDramaSynopsis(item) }
+        }
+
+        val inspected = linkedMapOf<String, Pair<SearchResponse, SynopsisDetails?>>()
+        for (item in candidates) {
+            val details = synchronized(synopsisDetailCache) {
+                synopsisDetailCache[item.url]
+            }
+            inspected[item.url] = item to details
+        }
+
+        val validItems = linkedMapOf<String, SearchResponse>()
+        val categoryItems = linkedMapOf<String, MutableList<SearchResponse>>()
+        val categoryUrls = linkedMapOf<String, MutableSet<String>>()
+
+        for ((url, pair) in inspected) {
+            val item = pair.first
+            val details = pair.second
+            val tags = details?.tags.orEmpty()
+            val signalText = listOf(item.name, tags.joinToString(" "), details?.synopsis.orEmpty())
+                .joinToString(" ")
+            // If the detail request succeeded, use its direct synopsis/tags to enforce
+            // the user's existing BL/female-lead exclusions; on request failure, retain
+            // the already-vetted listing card rather than emptying the home page.
+            if (details != null && !isAllowedDrama(item.name, signalText)) continue
+            if (isDubbedRelease(item.name, tags.joinToString(" "))) continue
+
+            val fixedItem = withPoster(item, details?.poster)
+            if (!hasUsablePoster(fixedItem)) continue
+            validItems[url] = fixedItem
+
+            val inferred = inferredCategories(item.name, signalText)
+            for (category in inferred) {
+                val urls = categoryUrls.getOrPut(category) { linkedSetOf() }
+                if (urls.add(url)) categoryItems.getOrPut(category) { mutableListOf() }.add(fixedItem)
+            }
+        }
+
+        // Keep the existing story/genre rows but replace entries with inspected
+        // versions (which can also recover posters from og:image). A successful
+        // synopsis/tag inspection may remove BL/female-led/dubbed releases.
+        val cleanedRows = rows.mapNotNull { row ->
+            val cleaned = row.list.mapNotNull { old ->
+                val inspectedItem = validItems[old.url]
+                if (inspectedItem != null) inspectedItem
+                else if (
+                    !isDubbedTitle(old.name) &&
+                    (inspected[old.url] == null || inspected[old.url]?.second == null)
+                ) old
+                else null
+            }.filter { hasUsablePoster(it) && !isDubbedTitle(it.name) }
+                .distinctBy { it.url }
+
+            if (cleaned.isEmpty()) null else HomePageList(row.name, cleaned)
+        }.toMutableList()
+
+        // Merge the synopsis-driven categories into the same row names already on
+        // the home screen, then append genuinely new categories.
+        val existingNames = cleanedRows.map { it.name.lowercase(Locale.ROOT) }.toMutableSet()
+        for ((category, items) in categoryItems) {
+            val mergedItems = (cleanedRows.firstOrNull {
+                it.name.equals(category, ignoreCase = true)
+            }?.list.orEmpty() + items).distinctBy { it.url }.filter { hasUsablePoster(it) }
+            if (items.isEmpty()) continue
+            val existingIndex = cleanedRows.indexOfFirst { it.name.equals(category, ignoreCase = true) }
+            if (existingIndex >= 0) {
+                cleanedRows[existingIndex] = HomePageList(category, mergedItems)
+            } else if (existingNames.add(category.lowercase(Locale.ROOT))) {
+                cleanedRows.add(HomePageList(category, items.distinctBy { it.url }))
+            }
+        }
+
+        return cleanedRows
     }
 
     private fun isDetailWatchUrl(url: String): Boolean {
@@ -528,7 +746,8 @@ class NartoDramaProvider : MainAPI() {
             else -> fetchHomeRows(page)
         }
         val visibleRows = replaceHomeDubbedWithOriginals(rows)
-        val finalRows = mergeHomeRows(visibleRows)
+        val classifiedRows = if (key == "home") categorizeHomeFromSynopses(visibleRows) else visibleRows
+        val finalRows = mergeHomeRows(classifiedRows)
         return newHomePageResponse(finalRows, hasNext = finalRows.isNotEmpty())
     }
 
@@ -539,9 +758,15 @@ class NartoDramaProvider : MainAPI() {
         // server-rendered Hot catalogue. These cards contain actual drama-detail URLs,
         // poster URLs and tag chips even if the provider JSON shape changes.
         rows.addAll(fetchProviderSections("anyreel", page, "en-US", "Popular", includeMetadataCategoryRows = true))
-        val hotFallback = fetchCatalogPage("/tag/hot", page, "en-US")
-        if (hotFallback.isNotEmpty()) {
-            rows.add(HomePageList("Popular Originals", hotFallback))
+        val baseFeeds = listOf(
+            "/tag/hot" to "Popular Originals",
+            "/tag/new" to "New Originals",
+            "/tag/popular" to "Popular This Week",
+            "/featured" to "Featured Originals"
+        )
+        for ((path, rowName) in baseFeeds) {
+            val results = fetchCatalogPage(path, page, "en-US")
+            if (results.isNotEmpty()) rows.add(HomePageList(rowName, results))
         }
 
         val storyRows = listOf(
