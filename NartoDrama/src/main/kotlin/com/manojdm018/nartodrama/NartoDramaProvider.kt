@@ -592,9 +592,11 @@ class NartoDramaProvider : MainAPI() {
                     "&limit=50&lang=" + URLEncoder.encode(locale, "UTF-8")
                 val response = runCatching { app.get(url, headers = requestHeaders()) }.getOrNull() ?: continue
                 val jsonResults = parseSearchJson(response.text)
-                if (jsonResults.isNotEmpty()) return originalOnlyResults(jsonResults)
+                val originalJsonResults = originalOnlyResults(jsonResults)
+                if (originalJsonResults.isNotEmpty()) return originalJsonResults
                 val pageResults = parseCards(response.document) + parseJsonLdCards(response.document)
-                if (pageResults.isNotEmpty()) return originalOnlyResults(pageResults)
+                val originalPageResults = originalOnlyResults(pageResults)
+                if (originalPageResults.isNotEmpty()) return originalPageResults
             }
         }
 
@@ -609,7 +611,8 @@ class NartoDramaProvider : MainAPI() {
                     val items = sections.optJSONObject(i)?.optJSONArray("items") ?: continue
                     out.addAll(parseApiItems(items))
                 }
-                if (out.isNotEmpty()) return originalOnlyResults(out)
+                val originalResults = originalOnlyResults(out)
+                if (originalResults.isNotEmpty()) return originalResults
             }
         }
         return emptyList()
@@ -747,8 +750,10 @@ class NartoDramaProvider : MainAPI() {
         if (cards.isNotEmpty()) {
             for (card in cards) {
                 val anchor = card.selectFirst("a[href*='/detail/watch/']")
-                val rawHref = card.attr("data-watch-url").ifBlank { anchor?.attr("href").orEmpty() }
-                .takeIf { it.contains("/detail/watch/", ignoreCase = true) }.orEmpty()
+                val rawHref = sequenceOf(
+                    card.attr("data-watch-url"),
+                    anchor?.attr("href").orEmpty()
+                ).firstOrNull { it.contains("/detail/watch/", ignoreCase = true) }.orEmpty()
                 if (rawHref.isBlank()) continue
                 val href = absoluteUrl(rawHref)
                 if (!isNartoUrl(href)) continue
