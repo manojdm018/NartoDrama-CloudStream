@@ -593,9 +593,9 @@ class NartoDramaProvider : MainAPI() {
     private val synopsisDetailCache = mutableMapOf<String, SynopsisDetails>()
     private val originalAudioLanguageByUrl = mutableMapOf<String, String>()
     private val synopsisAttempted = mutableSetOf<String>()
-    private val maxSynopsisItemsPerHome = 180
+    private val maxSynopsisItemsPerHome = 240
     // Detail-page reads are cached and accumulated on later visits to avoid one huge refresh.
-    private val maxNewSynopsisReadsPerHome = 40
+    private val maxNewSynopsisReadsPerHome = 50
 
     private fun extractRelatedTags(document: Document): List<String> {
         val output = linkedSetOf<String>()
@@ -1038,7 +1038,7 @@ class NartoDramaProvider : MainAPI() {
         // poster URLs and tag chips even if the provider JSON shape changes.
         rows.addAll(fetchProviderSections("anyreel", page, "en-US", "Popular", includeMetadataCategoryRows = true))
         // Mix in other original-release catalogues so inferred story rows have broader coverage.
-        for (provider in listOf("dramabox", "reelshort", "netshort", "goodshort")) {
+        for (provider in listOf("dramabox", "reelshort", "netshort", "goodshort", "shortmax", "moboreels", "dramawave")) {
             val label = providerChoices.firstOrNull { it.first == provider }?.second ?: provider
             rows.addAll(fetchProviderSections(provider, page, "en-US", "$label Originals"))
         }
@@ -1059,7 +1059,15 @@ class NartoDramaProvider : MainAPI() {
             "revenge" to "Revenge",
             "hidden-identity" to "Hidden Identity",
             "zero-to-hero" to "Zero to Hero",
-            "second-chance" to "Second Chance"
+            "second-chance" to "Second Chance",
+            "counterattack" to "Counterattack",
+            "underdog-rise" to "Underdog Rise",
+            "system" to "System & Superpowers",
+            "ceo" to "CEO & Billionaire",
+            "billionaire" to "Billionaire",
+            "karma-payback" to "Karma Payback",
+            "werewolf" to "Werewolf",
+            "ancient" to "Ancient / Costume"
         )
         for ((slug, title) in storyRows) {
             val results = fetchCatalogPage("/tag/" + slug, page, "en-US")
@@ -1069,7 +1077,14 @@ class NartoDramaProvider : MainAPI() {
         val genreRows = listOf(
             "romance" to "Romance",
             "fantasy" to "Fantasy",
-            "action" to "Action"
+            "action" to "Action",
+            "comedy" to "Comedy",
+            "thriller" to "Thriller",
+            "mystery" to "Mystery",
+            "crime" to "Crime",
+            "adventure" to "Adventure",
+            "sci-fi" to "Sci-Fi",
+            "family" to "Family"
         )
         for ((slug, title) in genreRows) {
             val results = fetchCatalogPage("/genre/" + slug, page, "en-US")
