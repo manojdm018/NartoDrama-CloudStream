@@ -136,7 +136,7 @@ class NartoDramaProvider : MainAPI() {
         RegexOption.IGNORE_CASE
     )
     private val femaleLeadPattern = Regex(
-        """\b(?:strong[-_ ]female[-_ ]lead|female[-_ ]led|female[-_ ]lead|female[-_ ]protagonist|female[-_ ]growth|heiress|villainess|princess|duchess|empress|queen|boss[-_ ]lady|girlboss|girl boss|independent[-_ ]woman|female[-_ ]magistrate|lady[-_ ]magistrate|female[-_ ]general|her[-_ ]revenge|sister['’]s[-_ ]revenge|the female lead|girl power|miss\s+[a-z]{2,})\b""",
+        """\b(?:strong[-_ ]female[-_ ]lead|female[-_ ]led|female[-_ ]lead|female[-_ ]protagonist|female[-_ ]growth|heiress|villainess|boss[-_ ]lady|girlboss|girl boss|independent[-_ ]woman|female[-_ ]magistrate|lady[-_ ]magistrate|female[-_ ]general|her[-_ ]revenge|sister['’]s[-_ ]revenge|the female lead|girl power)\b""",
         RegexOption.IGNORE_CASE
     )
 
@@ -198,6 +198,10 @@ class NartoDramaProvider : MainAPI() {
                 ),
                 " "
             )
+            .replace(
+                Regex("""(?i)\b(?:eng(?:lish)?[\s._-]*sub(?:bed|titles?)?|sub(?:bed|title(?:s)?|titled)?|with[\s._-]+subtitles?)\b"""),
+                " "
+            )
             .replace(Regex("""[\[\](){}（）【】]"""), " ")
             .replace(Regex("""\s+"""), " ")
             .trim()
@@ -208,6 +212,71 @@ class NartoDramaProvider : MainAPI() {
         baseAudioTitle(title)
             .lowercase(Locale.ROOT)
             .replace(Regex("""[^\p{L}\p{N}]"""), "")
+
+    // Carry an exact dubbed counterpart on the original drama URL. Remove this
+    // internal marker before requesting the source site.
+    private val linkedDubUrlParam = "narto_dub_url"
+
+    private fun stripLinkedDubParameter(url: String): String {
+        return url.replace(Regex("[?&]$linkedDubUrlParam=[^&#]*"), "")
+            .replace("?&", "?")
+            .replace("&&", "&")
+            .trimEnd('?', '&')
+    }
+
+    private fun linkedDubbedUrl(url: String): String? {
+        val raw = Regex("[?&]$linkedDubUrlParam=([^&#]+)")
+            .find(url)?.groupValues?.getOrNull(1) ?: return null
+        return runCatching { URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw)
+            .takeIf { isDetailWatchUrl(it) }
+    }
+
+    private fun withLinkedDubVersion(item: SearchResponse, dubbedUrl: String): SearchResponse {
+        val cleanUrl = stripLinkedDubParameter(item.url)
+        val cleanDubUrl = stripLinkedDubParameter(dubbedUrl)
+        if (cleanDubUrl.isBlank() || !isDetailWatchUrl(cleanDubUrl)) return item
+        val separator = if (cleanUrl.contains("?")) "&" else "?"
+        val linkedUrl = cleanUrl + separator + linkedDubUrlParam + "=" +
+            URLEncoder.encode(cleanDubUrl, "UTF-8")
+        return newTvSeriesSearchResponse(item.name, linkedUrl, TvType.TvSeries) {
+            posterUrl = item.posterUrl
+        }
+    }
+
+    // Multiple episode URLs or query parameters should not create duplicate cards.
+    private fun catalogueIdentityKey(url: String): String {
+        val cleanUrl = stripLinkedDubParameter(url)
+        val slug = episodePath.find(cleanUrl)?.groupValues?.getOrNull(1)
+        return if (!slug.isNullOrBlank()) "narto:" + slug.lowercase(Locale.ROOT)
+        else cleanUrl.substringBefore("#").substringBefore("?").trimEnd('/').lowercase(Locale.ROOT)
+    }
+
+    private fun linkedOriginalResults(items: List<SearchResponse>): List<SearchResponse> {
+        val candidates = items
+            .filter { isDetailWatchUrl(it.url) && hasUsablePoster(it) && isAllowedDrama(it.name) }
+            .distinctBy { it.url }
+        val dubsByTitle = candidates
+            .filter { isDubbedTitle(it.name) }
+            .filter { audioTitleKey(it.name).isNotBlank() }
+            .groupBy { audioTitleKey(it.name) }
+            .mapValues { (_, versions) -> versions.first() }
+        val seenTitles = HashSet<String>()
+        val seenSeries = HashSet<String>()
+        val results = mutableListOf<SearchResponse>()
+        for (item in candidates) {
+            if (isDubbedTitle(item.name)) continue
+            if (!seenSeries.add(catalogueIdentityKey(item.url))) continue
+            val key = audioTitleKey(item.name)
+            if (key.isNotBlank() && !seenTitles.add(key)) continue
+            val dub = dubsByTitle[key]
+            results.add(
+                if (key.isNotBlank() && dub != null && isAllowedDrama(dub.name)) {
+                    withLinkedDubVersion(item, dub.url)
+                } else item
+            )
+        }
+        return results
+    }
 
     private fun filterOriginalRows(rows: List<HomePageList>): List<HomePageList> {
         val allOriginals = rows.flatMap { it.list }
@@ -266,7 +335,7 @@ class NartoDramaProvider : MainAPI() {
         return null
     }
 
-    private suspend fun replaceHomeDubbedWithOriginals(rows: List<HomePageList>): List<HomePageList> {
+    private suspend fun replaceHomeDubbedWithOriginals(rows: List<HomePageList>): HomeRowsWithAudioVersions {
         val allItems = rows.flatMap { it.list }.distinctBy { it.url }
         val originalsByTitle = allItems
             .filterNot { isDubbedTitle(it.name) }
@@ -274,6 +343,15 @@ class NartoDramaProvider : MainAPI() {
             .groupBy { audioTitleKey(it.name) }
             .mapValues { (_, candidates) -> candidates.first() }
             .toMutableMap()
+        val dubbedByTitle = allItems
+            .filter { isDubbedTitle(it.name) && isAllowedDrama(it.name) }
+            .filter { audioTitleKey(it.name).isNotBlank() }
+            .groupBy { audioTitleKey(it.name) }
+            .mapValues { (_, candidates) -> candidates.first() }
+        val linkedByOriginalUrl = mutableMapOf<String, String>()
+        for ((key, dubbed) in dubbedByTitle) {
+            originalsByTitle[key]?.let { linkedByOriginalUrl[it.url] = dubbed.url }
+        }
 
         // If the counterpart isn't already in another home row, query Narto
         // search for a title-exact original. Limit lookups so one home refresh
@@ -291,10 +369,16 @@ class NartoDramaProvider : MainAPI() {
             if (original != null && !isDubbedTitle(original.name) &&
                 audioTitleKey(original.name) == key) {
                 originalsByTitle[key] = original
+                linkedByOriginalUrl[original.url] = dubbed.url
             }
         }
 
-        return rows.mapNotNull { row ->
+        for ((key, dubbed) in dubbedByTitle) {
+            originalsByTitle[key]?.let { original ->
+                linkedByOriginalUrl.putIfAbsent(original.url, dubbed.url)
+            }
+        }
+        val visibleRows = rows.mapNotNull { row ->
             val visible = row.list.mapNotNull { item ->
                 if (!isDubbedTitle(item.name)) item
                 else originalsByTitle[audioTitleKey(item.name)]
@@ -306,6 +390,7 @@ class NartoDramaProvider : MainAPI() {
             if (visible.isEmpty()) null
             else HomePageList(row.name, visible, row.isHorizontalImages)
         }
+        return HomeRowsWithAudioVersions(visibleRows, linkedByOriginalUrl)
     }
 
     private fun normalizedImageUrl(rawValue: String): String? {
@@ -537,7 +622,10 @@ class NartoDramaProvider : MainAPI() {
         ).containsMatchIn(signals)
         val hasRomance = synopsisCategoryPatterns.first { it.first == "Romance" }.second
             .containsMatchIn(signals)
+        val hasRevenge = synopsisCategoryPatterns.first { it.first == "Revenge" }.second
+            .containsMatchIn(signals)
         if (hasMaleLead && hasRomance) categories.add("Male Lead Romance")
+        if (hasMaleLead && hasRevenge) categories.add("Male Lead Revenge")
         if (matchesRebornFamilyThoughtsTrope(signals)) {
             categories.add("Reborn: Family Hears His Thoughts")
         }
@@ -588,6 +676,11 @@ class NartoDramaProvider : MainAPI() {
         val tags: List<String>,
         val poster: String?,
         val originalAudioLanguage: String?
+    )
+
+    private data class HomeRowsWithAudioVersions(
+        val rows: List<HomePageList>,
+        val dubbedByOriginalUrl: Map<String, String>
     )
 
     private val synopsisDetailCache = mutableMapOf<String, SynopsisDetails>()
@@ -766,7 +859,7 @@ class NartoDramaProvider : MainAPI() {
         while (candidates.size < maxSynopsisItemsPerHome && rowLists.any { rowOffset < it.size }) {
             for (row in rowLists) {
                 val item = row.getOrNull(rowOffset) ?: continue
-                if (seenCandidateUrls.add(item.url)) candidates.add(item)
+                if (seenCandidateUrls.add(catalogueIdentityKey(item.url))) candidates.add(item)
                 if (candidates.size >= maxSynopsisItemsPerHome) break
             }
             rowOffset++
@@ -925,7 +1018,7 @@ class NartoDramaProvider : MainAPI() {
             val pair = merged.getOrPut(key) { row.name to mutableListOf() }
             val urls = urlsByName.getOrPut(key) { HashSet() }
             for (item in row.list) {
-                if (urls.add(item.url)) pair.second.add(item)
+                if (urls.add(catalogueIdentityKey(item.url))) pair.second.add(item)
             }
         }
         return merged.values.mapNotNull { (name, items) ->
@@ -967,14 +1060,43 @@ class NartoDramaProvider : MainAPI() {
             }
             else -> fetchHomeRows(page)
         }
-        val visibleRows = replaceHomeDubbedWithOriginals(rows)
+        val replacedRows = replaceHomeDubbedWithOriginals(rows)
+        val visibleRows = replacedRows.rows
         val classifiedRows = if (key == "home" || key == "stories") {
             categorizeHomeFromSynopses(visibleRows)
         } else {
             visibleRows
         }
-        val finalRows = mergeHomeRows(classifiedRows)
-        return newHomePageResponse(finalRows, hasNext = finalRows.isNotEmpty())
+        val mergedRows = mergeHomeRows(classifiedRows)
+        val preferredHomeRows = listOf(
+            "Reborn: Family Hears His Thoughts",
+            "Reborn & Rebirth",
+            "Male Lead Revenge",
+            "Time Travel",
+            "Second Chance",
+            "Zero to Hero",
+            "Hidden Identity",
+            "Popular Originals",
+            "Popular This Week",
+            "New Originals",
+            "Featured Originals"
+        ).mapIndexed { index, name -> name.lowercase(Locale.ROOT) to index }.toMap()
+        val finalRows = if (key == "home") {
+            mergedRows.withIndex().sortedWith(
+                compareBy<IndexedValue<HomePageList>> {
+                    preferredHomeRows[it.value.name.trim().lowercase(Locale.ROOT)] ?: Int.MAX_VALUE
+                }.thenBy { it.index }
+            ).map { it.value }
+        } else mergedRows
+        val linkedRows = finalRows.mapNotNull { row ->
+            val linkedItems = row.list.map { item ->
+                val dubbedUrl = replacedRows.dubbedByOriginalUrl[item.url]
+                if (dubbedUrl != null) withLinkedDubVersion(item, dubbedUrl) else item
+            }.distinctBy { catalogueIdentityKey(it.url) }
+            if (linkedItems.isEmpty()) null
+            else HomePageList(row.name, linkedItems, row.isHorizontalImages)
+        }
+        return newHomePageResponse(linkedRows, hasNext = linkedRows.isNotEmpty())
     }
 
     private suspend fun fetchEnglishOriginalShorts(page: Int): List<SearchResponse> {
@@ -1230,7 +1352,7 @@ class NartoDramaProvider : MainAPI() {
             val items = sec.optJSONArray("items") ?: continue
             for (itemIndex in 0 until items.length()) {
                 val sourceItem = items.optJSONObject(itemIndex) ?: continue
-                val parsed = parseApiItems(JSONArray().put(sourceItem))
+                val parsed = parseApiItems(JSONArray().put(sourceItem), includeDubbed = true)
                 val result = parsed.firstOrNull() ?: continue
                 explicitAudioLanguageFromItem(sourceItem)?.let { language ->
                     synchronized(originalAudioLanguageByUrl) {
@@ -1274,11 +1396,11 @@ class NartoDramaProvider : MainAPI() {
                 val url = mainUrl + "/search?q=" + URLEncoder.encode(variant, "UTF-8") +
                     "&limit=50&lang=" + URLEncoder.encode(locale, "UTF-8")
                 val response = runCatching { app.get(url, headers = requestHeaders()) }.getOrNull() ?: continue
-                val jsonResults = parseSearchJson(response.text)
-                val originalJsonResults = originalOnlyResults(jsonResults)
+                val jsonResults = parseSearchJson(response.text, includeDubbed = true)
+                val originalJsonResults = linkedOriginalResults(jsonResults)
                 if (originalJsonResults.isNotEmpty()) return originalJsonResults
                 val pageResults = parseCards(response.document) + parseJsonLdCards(response.document)
-                val originalPageResults = originalOnlyResults(pageResults)
+                val originalPageResults = linkedOriginalResults(pageResults)
                 if (originalPageResults.isNotEmpty()) return originalPageResults
             }
         }
@@ -1292,25 +1414,25 @@ class NartoDramaProvider : MainAPI() {
                 val out = mutableListOf<SearchResponse>()
                 for (i in 0 until sections.length()) {
                     val items = sections.optJSONObject(i)?.optJSONArray("items") ?: continue
-                    out.addAll(parseApiItems(items))
+                    out.addAll(parseApiItems(items, includeDubbed = true))
                 }
-                val originalResults = originalOnlyResults(out)
+                val originalResults = linkedOriginalResults(out)
                 if (originalResults.isNotEmpty()) return originalResults
             }
         }
         return emptyList()
     }
 
-    private fun parseSearchJson(body: String): List<SearchResponse> {
+    private fun parseSearchJson(body: String, includeDubbed: Boolean = false): List<SearchResponse> {
         val root = runCatching { JSONObject(body) }.getOrNull() ?: return emptyList()
         val items = root.optJSONArray("items")
             ?: root.optJSONObject("data")?.optJSONArray("items")
             ?: root.optJSONArray("results")
             ?: return emptyList()
-        return parseApiItems(items)
+        return parseApiItems(items, includeDubbed)
     }
 
-    private fun parseApiItems(items: JSONArray): List<SearchResponse> {
+    private fun parseApiItems(items: JSONArray, includeDubbed: Boolean = false): List<SearchResponse> {
         val out = mutableListOf<SearchResponse>()
         val seen = HashSet<String>()
         for (i in 0 until items.length()) {
@@ -1325,11 +1447,17 @@ class NartoDramaProvider : MainAPI() {
             val url = absoluteUrl(rawUrl)
             if (!isDetailWatchUrl(url) || !seen.add(url)) continue
             if (!isAllowedDrama(title, catalogueMetadata(item))) continue
-            // The original-only endpoint should already avoid dubs, but enforce it
-            // at the item boundary as a second safeguard against tagged variants.
-            if (isDubbedRelease(title, item)) continue
+            val isDubbed = isDubbedRelease(title, item)
+            if (isDubbed && !includeDubbed) continue
             val image = imageUrlFromItem(item) ?: continue
-            out.add(newTvSeriesSearchResponse(title, url, TvType.TvSeries) { posterUrl = image })
+            // Some feeds mark a dub in metadata but omit "(Dub)" from the title.
+            // Mark it for pairing; linkedOriginalResults hides it from the catalogue.
+            val displayTitle = if (includeDubbed && isDubbed && !isDubbedTitle(title)) {
+                "$title (Dub)"
+            } else {
+                title
+            }
+            out.add(newTvSeriesSearchResponse(displayTitle, url, TvType.TvSeries) { posterUrl = image })
         }
         return out
     }
@@ -1392,7 +1520,8 @@ class NartoDramaProvider : MainAPI() {
     private fun deduplicateResults(items: List<SearchResponse>): List<SearchResponse> {
         val seen = HashSet<String>()
         return items.filter {
-            isDetailWatchUrl(it.url) && hasUsablePoster(it) && seen.add(it.url)
+            isDetailWatchUrl(it.url) && hasUsablePoster(it) &&
+                seen.add(catalogueIdentityKey(it.url))
         }
     }
 
@@ -1402,7 +1531,7 @@ class NartoDramaProvider : MainAPI() {
         val seenUrls = HashSet<String>()
         return originals.filter { item ->
             val titleKey = audioTitleKey(item.name)
-            seenUrls.add(item.url) &&
+            seenUrls.add(catalogueIdentityKey(item.url)) &&
                 (titleKey.isBlank() || seenTitles.add(titleKey))
         }
     }
@@ -1485,9 +1614,11 @@ class NartoDramaProvider : MainAPI() {
 
 
     override suspend fun load(url: String): LoadResponse? {
-        val pageResponse = app.get(url, headers = requestHeaders(mainUrl + "/"))
+        val linkedDubUrl = linkedDubbedUrl(url)
+        val cleanUrl = stripLinkedDubParameter(url)
+        val pageResponse = app.get(cleanUrl, headers = requestHeaders(mainUrl + "/"))
         val document = pageResponse.document
-        val resolvedUrl = pageResponse.url.takeIf { it.isNotBlank() } ?: url
+        val resolvedUrl = pageResponse.url.takeIf { it.isNotBlank() } ?: cleanUrl
 
         val title = document.selectFirst("h1")?.text()?.trim()
             ?.replace(Regex("""\s+Episode\s+\d+.*$""", RegexOption.IGNORE_CASE), "")
@@ -1535,24 +1666,83 @@ class NartoDramaProvider : MainAPI() {
         }.distinctBy { it.first }.sortedBy { it.first }
 
         val currentNumber = route?.groupValues?.getOrNull(2)?.toIntOrNull()
-        val episodes = if (episodeLinks.isNotEmpty()) {
-            episodeLinks.map { (number, episodeUrl) ->
-                newEpisode(episodeUrl) {
-                    name = "Episode $number"
+
+        // Use paired episodes only when both public detail pages resolve to the same normalized title.
+        val linkedDubEpisodes: Map<Int, String> = linkedDubUrl?.let { rawDubUrl ->
+            val cleanDubUrl = stripLinkedDubParameter(rawDubUrl)
+            val dubResponse = runCatching {
+                app.get(cleanDubUrl, headers = requestHeaders(mainUrl + "/"))
+            }.getOrNull()
+            val dubDocument = dubResponse?.document
+            val dubResolvedUrl = dubResponse?.url?.takeIf { it.isNotBlank() } ?: cleanDubUrl
+            val dubTitle = dubDocument?.selectFirst("h1")?.text()?.trim()
+                ?.replace(Regex("""\s+Episode\s+\d+.*$""", RegexOption.IGNORE_CASE), "")
+                ?: dubDocument?.selectFirst("meta[property=og:title]")?.attr("content")
+                    ?.replace(Regex("""\s+Episode\s+\d+.*$""", RegexOption.IGNORE_CASE), "")
+                    ?.replace(Regex("""\s+-\s+Free Streaming.*$""", RegexOption.IGNORE_CASE), "")
+                    ?.trim().orEmpty()
+            val dubSlug = episodePath.find(dubResolvedUrl)?.groupValues?.getOrNull(1)
+            if (dubDocument != null && audioTitleKey(dubTitle) == audioTitleKey(title) &&
+                dubSlug != null && isAllowedDrama(dubTitle)) {
+                val parsedDubEpisodes = dubDocument.select("a[href]").mapNotNull { anchor ->
+                    val episodeUrl = anchor.absUrl("href")
+                    val match = Regex(
+                        """/detail/watch/${Regex.escape(dubSlug)}/(\d+)(?:[/?#].*)?$""",
+                        RegexOption.IGNORE_CASE
+                    ).find(episodeUrl) ?: return@mapNotNull null
+                    if (!episodeUrl.startsWith(mainUrl)) return@mapNotNull null
+                    val number = match.groupValues[1].toIntOrNull() ?: return@mapNotNull null
+                    number to episodeUrl.substringBefore("#")
+                }.distinctBy { it.first }.sortedBy { it.first }.toMap().toMutableMap()
+                if (parsedDubEpisodes.isEmpty()) {
+                    val number = episodePath.find(dubResolvedUrl)?.groupValues?.getOrNull(2)?.toIntOrNull()
+                    if (number != null) parsedDubEpisodes[number] = dubResolvedUrl
+                }
+                parsedDubEpisodes
+            } else emptyMap()
+        } ?: emptyMap()
+
+        val regularEpisodeLinks = if (episodeLinks.isNotEmpty()) {
+            episodeLinks
+        } else {
+            val firstUrl = if (currentNumber != null) resolvedUrl
+                else "$mainUrl/detail/watch/$slug/1?lang=en-US"
+            listOf((currentNumber ?: 1) to firstUrl)
+        }
+        val hasLinkedDub = linkedDubEpisodes.isNotEmpty()
+        val episodes = regularEpisodeLinks.flatMap { (number, episodeUrl) ->
+            val dubEpisodeUrl = linkedDubEpisodes[number]
+            if (hasLinkedDub && dubEpisodeUrl != null) {
+                listOf(
+                    newEpisode(episodeUrl) {
+                        name = "Episode $number · SUB"
+                        episode = number
+                        posterUrl = poster
+                    },
+                    newEpisode(dubEpisodeUrl) {
+                        name = "Episode $number · DUB"
+                        episode = number
+                        posterUrl = poster
+                    }
+                )
+            } else {
+                listOf(newEpisode(episodeUrl) {
+                    name = if (hasLinkedDub) "Episode $number · SUB" else "Episode $number"
                     episode = number
                     posterUrl = poster
-                }
+                })
             }
-        } else {
-            val firstUrl = if (currentNumber != null) resolvedUrl else "$mainUrl/detail/watch/$slug/1?lang=en-US"
-            listOf(newEpisode(firstUrl) {
-                name = "Episode ${currentNumber ?: 1}"
-                episode = currentNumber ?: 1
-                posterUrl = poster
-            })
         }
 
-        return newTvSeriesLoadResponse(title, resolvedUrl, TvType.TvSeries, episodes) {
+        // Retain the paired URL marker in the series identity so reopening this
+        // detail page from watch history can reconstruct the same version choices.
+        val seriesUrl = if (hasLinkedDub && linkedDubUrl != null) {
+            val separator = if (resolvedUrl.contains("?")) "&" else "?"
+            resolvedUrl + separator + linkedDubUrlParam + "=" +
+                URLEncoder.encode(stripLinkedDubParameter(linkedDubUrl), "UTF-8")
+        } else resolvedUrl
+
+        return newTvSeriesLoadResponse(title, seriesUrl, TvType.TvSeries, episodes) {
             posterUrl = poster
             this.plot = plot
         }
