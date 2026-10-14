@@ -212,7 +212,6 @@ class NartoDramaProvider : MainAPI() {
     // Carry an exact dubbed counterpart on the original drama URL. Remove this
     // internal marker before requesting the source site.
     private val linkedDubUrlParam = "narto_dub_url"
-    private val homeDubbedCounterparts = mutableMapOf<String, String>()
 
     private fun stripLinkedDubParameter(url: String): String {
         return url.replace(Regex("[?&]$linkedDubUrlParam=[^&#]*"), "")
@@ -332,7 +331,7 @@ class NartoDramaProvider : MainAPI() {
         return null
     }
 
-    private suspend fun replaceHomeDubbedWithOriginals(rows: List<HomePageList>): List<HomePageList> {
+    private suspend fun replaceHomeDubbedWithOriginals(rows: List<HomePageList>): HomeRowsWithAudioVersions {
         val allItems = rows.flatMap { it.list }.distinctBy { it.url }
         val originalsByTitle = allItems
             .filterNot { isDubbedTitle(it.name) }
@@ -375,12 +374,7 @@ class NartoDramaProvider : MainAPI() {
                 linkedByOriginalUrl.putIfAbsent(original.url, dubbed.url)
             }
         }
-        synchronized(homeDubbedCounterparts) {
-            homeDubbedCounterparts.clear()
-            homeDubbedCounterparts.putAll(linkedByOriginalUrl)
-        }
-
-        return rows.mapNotNull { row ->
+        val visibleRows = rows.mapNotNull { row ->
             val visible = row.list.mapNotNull { item ->
                 if (!isDubbedTitle(item.name)) item
                 else originalsByTitle[audioTitleKey(item.name)]
@@ -392,6 +386,7 @@ class NartoDramaProvider : MainAPI() {
             if (visible.isEmpty()) null
             else HomePageList(row.name, visible, row.isHorizontalImages)
         }
+        return HomeRowsWithAudioVersions(visibleRows, linkedByOriginalUrl)
     }
 
     private fun normalizedImageUrl(rawValue: String): String? {
@@ -677,6 +672,11 @@ class NartoDramaProvider : MainAPI() {
         val tags: List<String>,
         val poster: String?,
         val originalAudioLanguage: String?
+    )
+
+    private data class HomeRowsWithAudioVersions(
+        val rows: List<HomePageList>,
+        val dubbedByOriginalUrl: Map<String, String>
     )
 
     private val synopsisDetailCache = mutableMapOf<String, SynopsisDetails>()
@@ -1027,7 +1027,6 @@ class NartoDramaProvider : MainAPI() {
 
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        synchronized(homeDubbedCounterparts) { homeDubbedCounterparts.clear() }
         val key = request.data.substringAfter("csbrowse=", "").substringBefore("&")
             .let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }
             .ifBlank { "provider:anyreel" }
@@ -1057,7 +1056,8 @@ class NartoDramaProvider : MainAPI() {
             }
             else -> fetchHomeRows(page)
         }
-        val visibleRows = replaceHomeDubbedWithOriginals(rows)
+        val replacedRows = replaceHomeDubbedWithOriginals(rows)
+        val visibleRows = replacedRows.rows
         val classifiedRows = if (key == "home" || key == "stories") {
             categorizeHomeFromSynopses(visibleRows)
         } else {
@@ -1066,9 +1066,7 @@ class NartoDramaProvider : MainAPI() {
         val finalRows = mergeHomeRows(classifiedRows)
         val linkedRows = finalRows.mapNotNull { row ->
             val linkedItems = row.list.map { item ->
-                val dubbedUrl = synchronized(homeDubbedCounterparts) {
-                    homeDubbedCounterparts[item.url]
-                }
+                val dubbedUrl = replacedRows.dubbedByOriginalUrl[item.url]
                 if (dubbedUrl != null) withLinkedDubVersion(item, dubbedUrl) else item
             }.distinctBy { catalogueIdentityKey(it.url) }
             if (linkedItems.isEmpty()) null
