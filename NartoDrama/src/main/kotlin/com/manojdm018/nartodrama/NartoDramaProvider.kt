@@ -198,6 +198,10 @@ class NartoDramaProvider : MainAPI() {
                 ),
                 " "
             )
+            .replace(
+                Regex("""(?i)\b(?:eng(?:lish)?[\s._-]*sub(?:bed|titles?)?|sub(?:bed|title(?:s)?|titled)?|with[\s._-]+subtitles?)\b"""),
+                " "
+            )
             .replace(Regex("""[\[\](){}（）【】]"""), " ")
             .replace(Regex("""\s+"""), " ")
             .trim()
@@ -224,13 +228,13 @@ class NartoDramaProvider : MainAPI() {
         val raw = Regex("[?&]$linkedDubUrlParam=([^&#]+)")
             .find(url)?.groupValues?.getOrNull(1) ?: return null
         return runCatching { URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw)
-            .takeIf { it.startsWith("https://", true) || it.startsWith("http://", true) }
+            .takeIf { isDetailWatchUrl(it) }
     }
 
     private fun withLinkedDubVersion(item: SearchResponse, dubbedUrl: String): SearchResponse {
         val cleanUrl = stripLinkedDubParameter(item.url)
         val cleanDubUrl = stripLinkedDubParameter(dubbedUrl)
-        if (cleanDubUrl.isBlank()) return item
+        if (cleanDubUrl.isBlank() || !isDetailWatchUrl(cleanDubUrl)) return item
         val separator = if (cleanUrl.contains("?")) "&" else "?"
         val linkedUrl = cleanUrl + separator + linkedDubUrlParam + "=" +
             URLEncoder.encode(cleanDubUrl, "UTF-8")
@@ -1730,7 +1734,15 @@ class NartoDramaProvider : MainAPI() {
             }
         }
 
-        return newTvSeriesLoadResponse(title, resolvedUrl, TvType.TvSeries, episodes) {
+        // Retain the paired URL marker in the series identity so reopening this
+        // detail page from watch history can reconstruct the same version choices.
+        val seriesUrl = if (hasLinkedDub && linkedDubUrl != null) {
+            val separator = if (resolvedUrl.contains("?")) "&" else "?"
+            resolvedUrl + separator + linkedDubUrlParam + "=" +
+                URLEncoder.encode(stripLinkedDubParameter(linkedDubUrl), "UTF-8")
+        } else resolvedUrl
+
+        return newTvSeriesLoadResponse(title, seriesUrl, TvType.TvSeries, episodes) {
             posterUrl = poster
             this.plot = plot
         }
