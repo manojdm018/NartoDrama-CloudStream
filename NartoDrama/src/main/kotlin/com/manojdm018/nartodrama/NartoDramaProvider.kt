@@ -693,6 +693,28 @@ class NartoDramaProvider : MainAPI() {
             .distinct()
     }
 
+    private fun bestSynopsis(document: Document): String? {
+        val explicitSelectors = listOf(
+            ".synopsis", "#synopsis", "[class*=synopsis]",
+            ".plot", "#plot", "[class*=plot]", ".storyline",
+            ".detail-description", ".movie-description", ".drama-description",
+            ".plot-summary", ".story-summary", ".drama-summary", "[itemprop=description]"
+        )
+        val explicit = explicitSelectors.flatMap { selector ->
+            document.select(selector).map { it.text().replace(Regex("""\s+"""), " ").trim() }
+        }.filter { it.length in 60..4500 }
+            .filterNot {
+                it.contains("Narto Drama is a short drama streaming platform", true) ||
+                    it.contains("log in to watch without ads", true) ||
+                    it.contains("you may like", true) ||
+                    it.contains("start watching episode", true) ||
+                    it.contains("download our app", true)
+            }
+            .distinct()
+            .maxByOrNull { it.length }
+        return explicit ?: synopsisCandidates(document).maxByOrNull { it.length }
+    }
+
     private suspend fun inspectDramaSynopsis(item: SearchResponse): SynopsisDetails? {
         synchronized(synopsisDetailCache) {
             synopsisDetailCache[item.url]?.let { return it }
@@ -704,8 +726,7 @@ class NartoDramaProvider : MainAPI() {
         }.getOrNull() ?: return null
 
         val tags = extractRelatedTags(document)
-        val synopsis = synopsisCandidates(document)
-            .maxByOrNull { it.length }
+        val synopsis = bestSynopsis(document)
             ?.take(4500)
             .orEmpty()
         val poster = sequenceOf(
@@ -1486,8 +1507,7 @@ class NartoDramaProvider : MainAPI() {
         val fallbackPlot = document.selectFirst("meta[name=description]")?.attr("content")
             ?.takeIf { it.isNotBlank() }
             ?: document.selectFirst("meta[property=og:description]")?.attr("content")
-        val plot = synopsisCandidates(document)
-            .maxByOrNull { it.length }
+        val plot = bestSynopsis(document)
             ?.takeIf { it.length >= 60 }
             ?: fallbackPlot
 
@@ -1646,7 +1666,16 @@ class NartoDramaProvider : MainAPI() {
 
         // Prefer the refresh-source URL and expose one source; HLS master playlists
         // retain their own adaptive quality levels for the player selector.
-        for ((label, mediaUrl) in candidates) {
+        val prioritizedCandidates = candidates.entries.sortedBy { entry ->
+            when {
+                entry.value.contains(".m3u8", true) ||
+                    (payload?.optBoolean("direct_play_is_hls", false) == true &&
+                        entry.key.contains("Direct")) -> 0
+                entry.value.contains(".mpd", true) -> 1
+                else -> 2
+            }
+        }
+        for ((label, mediaUrl) in prioritizedCandidates) {
             val type = when {
                 mediaUrl.contains(".m3u8", true) ||
                     (payload?.optBoolean("direct_play_is_hls", false) == true && label.contains("Direct")) ->
