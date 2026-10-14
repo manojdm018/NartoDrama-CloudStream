@@ -1063,7 +1063,27 @@ class NartoDramaProvider : MainAPI() {
         } else {
             visibleRows
         }
-        val finalRows = mergeHomeRows(classifiedRows)
+        val mergedRows = mergeHomeRows(classifiedRows)
+        val preferredHomeRows = listOf(
+            "Reborn: Family Hears His Thoughts",
+            "Reborn & Rebirth",
+            "Male Lead Revenge",
+            "Time Travel",
+            "Second Chance",
+            "Zero to Hero",
+            "Hidden Identity",
+            "Popular Originals",
+            "Popular This Week",
+            "New Originals",
+            "Featured Originals"
+        ).mapIndexed { index, name -> name.lowercase(Locale.ROOT) to index }.toMap()
+        val finalRows = if (key == "home") {
+            mergedRows.withIndex().sortedWith(
+                compareBy<IndexedValue<HomePageList>> {
+                    preferredHomeRows[it.value.name.trim().lowercase(Locale.ROOT)] ?: Int.MAX_VALUE
+                }.thenBy { it.index }
+            ).map { it.value }
+        } else mergedRows
         val linkedRows = finalRows.mapNotNull { row ->
             val linkedItems = row.list.map { item ->
                 val dubbedUrl = replacedRows.dubbedByOriginalUrl[item.url]
