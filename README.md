@@ -29,9 +29,13 @@ The two URLs list different plugins. Installing DramaFren does not install Narto
 
 GitHub Actions builds both modules separately and publishes their individual packages. Pull-request builds compile the packages but do not publish either repository branch. The build artifact contains both `.cs3` files for manual installation if needed.
 
-## Content preferences
+## Content preferences and language versions
 
-Both providers filter explicit BL and common female-lead metadata signals. NartoDrama also filters releases explicitly marked as dubbed in titles or release metadata, so original releases remain visible. This depends on the source site providing a detectable title/tag/audio-version signal; a dub with no such signal may still appear. Custom in-detail SUB/DUB toggles are not supported by the standard CloudStream plugin interface; a paired version must also exist on the source site.
+Both providers filter explicit BL and common female-lead metadata signals. NartoDrama filters dubbed releases from the visible catalogue and, where it finds an exact-title counterpart, links the dubbed release to the original entry. The detail page can present matched episodes as `Episode N · SUB` and `Episode N · DUB` choices in the same episode list. This is the plugin-only approach; the standard CloudStream plugin interface does not expose an arbitrary custom segmented SUB/DUB toggle inside the detail page.
+
+Pairing deliberately requires an exact normalized title match and a valid detail page. A paired choice may be unavailable when the source has no counterpart, uses inconsistent naming, or supplies incomplete metadata. Original audio, dubbed audio, and subtitle availability are distinct properties, and subtitles still depend on the source providing subtitle tracks.
+
+The provider narrows a few overly broad role keywords that could incorrectly exclude a male-led drama just because its metadata mentions a princess, queen, or similar character. Metadata-based filtering is conservative: titles with insufficient or misleading source metadata cannot be classified perfectly.
 
 ## Sources
 
