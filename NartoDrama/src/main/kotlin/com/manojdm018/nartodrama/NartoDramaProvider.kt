@@ -552,28 +552,31 @@ class NartoDramaProvider : MainAPI() {
     private fun matchesRebornFamilyThoughtsTrope(signals: String): Boolean {
         val text = signals.replace(Regex("""<[^>]+>"""), " ")
             .replace(Regex("""\s+"""), " ")
-        val family = """(?:family|families|parents?|father|mother|dad|mom|brothers?|sisters?|siblings|relatives|adoptive parents?|adoptive family|grandparents?|grandfather|grandmother|clan)"""
+        val family = """(?:family|families|parents?|father|mother|dad|mom|brothers?|sisters?|siblings|relatives|adoptive parents?|adoptive family|grandparents?|grandfather|grandmother|clan|家人|父母|父亲|母亲|兄弟|姐妹)"""
         val hasPreviousLife = Regex(
-            """(?i)\b(?:previous|past|former|prior|first|last)\s+(?:life|incarnation)\b|前世"""
+            """(?i)\b(?:previous|past|former|prior|first|last)\s+(?:life|incarnation)\b|\bin (?:his|her|their) (?:former|past|previous) life\b|前世"""
         ).containsMatchIn(text)
         val hasRebirth = Regex(
-            """(?i)\b(?:reborn|rebirth|reincarnat\w*|born again|return\w*\s+to life|regress\w*)\b|重生|转世"""
+            """(?i)\b(?:reborn|rebirth|reincarnat\w*|born again|return\w*\s+to life|regress\w*|restart\w* (?:his|her|their) life|live (?:his|her|their) life again)\b|重生|转世"""
         ).containsMatchIn(text)
         val hasDeath = Regex(
-            """(?i)\b(?:die\w*|death|dead|kill\w*|murder\w*|execut\w*|poison\w*|left\s+(?:him|her|them)\s+to\s+die)\b"""
+            """(?i)\b(?:die\w*|death|dead|kill\w*|murder\w*|execut\w*|poison\w*|sacrific\w*|perish\w*|demise|left\s+(?:him|her|them)\s+to\s+die|caus\w* (?:his|her|their) death|led to (?:his|her|their) death)\b|害死"""
         ).containsMatchIn(text)
+        val betrayal = """(?:betray\w*|backstab\w*|turn(?:s|ed|ing)?\s+against|plot(?:s|ted|ting)?\s+against|kill\w*|murder\w*|poison\w*|frame\w*|abandon\w*|sacrific\w*|cause\w* (?:his|her|their) death|led to (?:his|her|their) death|害死|背叛)"""
         val hasFamilyBetrayal = Regex(
-            """(?i)(?:$family).{0,120}(?:betray\w*|backstab\w*|turn(?:s|ed|ing)?\s+against|plot(?:s|ted|ting)?\s+against|kill\w*|murder\w*|poison\w*|frame\w*)|(?:betray\w*|backstab\w*|turn(?:s|ed|ing)?\s+against|plot(?:s|ted|ting)?\s+against|kill\w*|murder\w*|poison\w*|frame\w*).{0,120}(?:$family)"""
+            """(?i)(?:$family).{0,180}$betrayal|$betrayal.{0,180}(?:$family)"""
         ).containsMatchIn(text)
         val hasInnerThoughts = Regex(
-            """(?i)\b(?:inner thoughts?|thoughts? in (?:his|her|their) mind|inner voice|inner monologue|mind voice|what he thinks|his thoughts)\b|心声"""
+            """(?i)\b(?:inner thoughts?|thoughts? in (?:his|her|their) mind|inner voice|inner monologue|mind voice|what he thinks|his thoughts|thoughts? (?:are|can be) heard|hear(?:ing)? (?:his|her|their) thoughts|voice inside (?:his|her|their) mind|mind reading)\b|心声"""
         ).containsMatchIn(text)
-        val familyHearsThoughts = hasInnerThoughts &&
-            Regex("""(?i)\b(?:hear\w*|listen\w*|read\w*|telepath\w*)\b""").containsMatchIn(text) &&
+        val canHear = Regex(
+            """(?i)\b(?:hear\w*|listen\w*|read\w*|telepath\w*|mind[ -]?read\w*|thoughts? (?:are|can be) heard)\b|听见|听到"""
+        ).containsMatchIn(text)
+        val familyHearsThoughts = hasInnerThoughts && canHear &&
             Regex("(?i)$family").containsMatchIn(text)
         val familySupport = Regex("(?i)$family").containsMatchIn(text) &&
             Regex(
-                """(?i)\b(?:support\w*|pamper\w*|spoil\w*|protect\w*|cherish\w*|dote\w*|treasure\w*|adore\w*|defend\w*|compensat\w*|make\s+(?:him|the boy|their son)\s+happy|treat\w*\s+him\s+(?:well|like)|care\s+for\s+him|stand\s+by\s+him|love\s+him|make\s+amends)\b"""
+                """(?i)\b(?:support\w*|pamper\w*|spoil\w*|protect\w*|cherish\w*|dote\w*|treasure\w*|adore\w*|defend\w*|compensat\w*|make\s+(?:him|the boy|their son)\s+happy|treat\w*\s+him\s+(?:well|like)|care\s+for\s+him|stand\s+by\s+him|love\s+him|make\s+amends|regret\w*|overprotect\w*|favor\w*|宠爱|疼爱|保护|补偿|偏爱)\b"""
             ).containsMatchIn(text)
 
         return hasPreviousLife && hasRebirth && hasDeath && hasFamilyBetrayal &&
@@ -590,7 +593,8 @@ class NartoDramaProvider : MainAPI() {
     private val synopsisDetailCache = mutableMapOf<String, SynopsisDetails>()
     private val originalAudioLanguageByUrl = mutableMapOf<String, String>()
     private val synopsisAttempted = mutableSetOf<String>()
-    private val maxSynopsisItemsPerHome = 120
+    private val maxSynopsisItemsPerHome = 180
+    // Detail-page reads are cached and accumulated on later visits to avoid one huge refresh.
     private val maxNewSynopsisReadsPerHome = 40
 
     private fun extractRelatedTags(document: Document): List<String> {
@@ -624,9 +628,10 @@ class NartoDramaProvider : MainAPI() {
                 ?.takeIf { it.isNotBlank() }?.let { candidates.add(it) }
         }
         listOf(
-            "[itemprop=description]", ".synopsis", ".plot", ".storyline",
+            "[itemprop=description]", ".synopsis", "#synopsis", "[class*=synopsis]",
+            ".plot", "#plot", "[class*=plot]", ".storyline", ".summary", "#summary",
             ".detail-description", ".movie-description", ".drama-description",
-            "#synopsis", "#plot", ".description"
+            ".plot-summary", ".story-summary", ".drama-summary", ".description"
         ).forEach { selector ->
             document.select(selector).forEach { node ->
                 node.text().trim().takeIf { it.length >= 60 }?.let { candidates.add(it) }
@@ -634,6 +639,36 @@ class NartoDramaProvider : MainAPI() {
         }
         document.select("main p, article p, p").forEach { p ->
             p.text().trim().takeIf { it.length >= 60 }?.let { candidates.add(it) }
+        }
+
+        // Some drama pages publish the actual plot only in structured JSON-LD.
+        fun collectStructuredDescriptions(value: Any?) {
+            when (value) {
+                is JSONObject -> {
+                    for (key in listOf("description", "synopsis", "plot", "storyline", "summary", "abstract")) {
+                        val raw = value.opt(key)
+                        if (raw is String) {
+                            val candidate = raw.trim()
+                            if (candidate.length >= 60 && candidate.length <= 4500) {
+                                candidates.add(candidate)
+                            }
+                        }
+                    }
+                    val keys = value.keys()
+                    while (keys.hasNext()) {
+                        collectStructuredDescriptions(value.opt(keys.next()))
+                    }
+                }
+                is JSONArray -> {
+                    for (index in 0 until value.length()) collectStructuredDescriptions(value.opt(index))
+                }
+            }
+        }
+        document.select("script[type=application/ld+json]").forEach { script ->
+            val raw = script.data().ifBlank { script.html() }.trim()
+            if (raw.isBlank()) return@forEach
+            runCatching { JSONObject(raw) }.getOrNull()?.let { collectStructuredDescriptions(it) }
+            runCatching { JSONArray(raw) }.getOrNull()?.let { collectStructuredDescriptions(it) }
         }
 
         return candidates
@@ -644,6 +679,9 @@ class NartoDramaProvider : MainAPI() {
                     it.contains("log in to watch without ads", true) ||
                     it.contains("you may like", true) ||
                     it.contains("start watching episode", true) ||
+                    it.contains("watch now and enjoy", true) ||
+                    it.contains("download our app", true) ||
+                    it.contains("no. 1 short drama platform", true) ||
                     it.startsWith("watch ", true) && it.contains(" on Narto Drama ", true)
             }
             .map { candidate ->
@@ -697,10 +735,21 @@ class NartoDramaProvider : MainAPI() {
     }
 
     private suspend fun categorizeHomeFromSynopses(rows: List<HomePageList>): List<HomePageList> {
-        val candidates = rows.flatMap { it.list }
-            .filter { isDetailWatchUrl(it.url) && !isDubbedTitle(it.name) }
-            .distinctBy { it.url }
-            .take(maxSynopsisItemsPerHome)
+        val rowLists = rows.map { row ->
+            row.list.filter { isDetailWatchUrl(it.url) && !isDubbedTitle(it.name) }
+        }
+        val candidates = mutableListOf<SearchResponse>()
+        val seenCandidateUrls = HashSet<String>()
+        var rowOffset = 0
+        // Round-robin keeps titles from smaller genre/provider rows in the synopsis pool.
+        while (candidates.size < maxSynopsisItemsPerHome && rowLists.any { rowOffset < it.size }) {
+            for (row in rowLists) {
+                val item = row.getOrNull(rowOffset) ?: continue
+                if (seenCandidateUrls.add(item.url)) candidates.add(item)
+                if (candidates.size >= maxSynopsisItemsPerHome) break
+            }
+            rowOffset++
+        }
 
         if (candidates.isEmpty()) return rows
 
@@ -889,7 +938,11 @@ class NartoDramaProvider : MainAPI() {
             else -> fetchHomeRows(page)
         }
         val visibleRows = replaceHomeDubbedWithOriginals(rows)
-        val classifiedRows = if (key == "home") categorizeHomeFromSynopses(visibleRows) else visibleRows
+        val classifiedRows = if (key == "home" || key == "stories") {
+            categorizeHomeFromSynopses(visibleRows)
+        } else {
+            visibleRows
+        }
         val finalRows = mergeHomeRows(classifiedRows)
         return newHomePageResponse(finalRows, hasNext = finalRows.isNotEmpty())
     }
@@ -954,6 +1007,11 @@ class NartoDramaProvider : MainAPI() {
         // server-rendered Hot catalogue. These cards contain actual drama-detail URLs,
         // poster URLs and tag chips even if the provider JSON shape changes.
         rows.addAll(fetchProviderSections("anyreel", page, "en-US", "Popular", includeMetadataCategoryRows = true))
+        // Mix in other original-release catalogues so inferred story rows have broader coverage.
+        for (provider in listOf("dramabox", "reelshort", "netshort", "goodshort")) {
+            val label = providerChoices.firstOrNull { it.first == provider }?.second ?: provider
+            rows.addAll(fetchProviderSections(provider, page, "en-US", "$label Originals"))
+        }
         val baseFeeds = listOf(
             "/tag/hot" to "Popular Originals",
             "/tag/new" to "New Originals",
@@ -1425,9 +1483,13 @@ class NartoDramaProvider : MainAPI() {
             ?.takeIf { it.startsWith("http") }
             ?: document.selectFirst("img[alt]")?.absUrl("src")?.takeIf { it.startsWith("http") }
 
-        val plot = document.selectFirst("meta[name=description]")?.attr("content")
+        val fallbackPlot = document.selectFirst("meta[name=description]")?.attr("content")
             ?.takeIf { it.isNotBlank() }
             ?: document.selectFirst("meta[property=og:description]")?.attr("content")
+        val plot = synopsisCandidates(document)
+            .maxByOrNull { it.length }
+            ?.takeIf { it.length >= 60 }
+            ?: fallbackPlot
 
         val route = episodePath.find(resolvedUrl) ?: episodePath.find(url)
         val slug = route?.groupValues?.getOrNull(1) ?: return null
@@ -1486,29 +1548,19 @@ class NartoDramaProvider : MainAPI() {
 
             if (type == ExtractorLinkType.M3U8) {
                 expandedHlsMasters.add(mediaUrl)
-                val variants = parseHlsVariants(mediaUrl, data)
-                if (variants.isNotEmpty()) {
-                    // Keep the HLS master as an Auto option; child playlists may not expose
-                    // the master playlist's alternate audio renditions.
-                    if (emittedMediaUrls.add(mediaUrl)) {
-                        callback(
-                            newExtractorLink(name, "$label • Auto (audio tracks if available)", mediaUrl, ExtractorLinkType.M3U8) {
-                                referer = data
-                                quality = Qualities.Unknown.value
-                            }
-                        )
+                if (!emittedMediaUrls.add(mediaUrl)) return false
+                callback(
+                    newExtractorLink(
+                        name,
+                        "$label • Adaptive quality (use player quality selector)",
+                        mediaUrl,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        referer = data
+                        quality = Qualities.Unknown.value
                     }
-                    for (variant in variants) {
-                        if (!emittedMediaUrls.add(variant.url)) continue
-                        callback(
-                            newExtractorLink(name, "$label • ${variant.label}", variant.url, ExtractorLinkType.M3U8) {
-                                referer = data
-                                quality = variant.quality
-                            }
-                        )
-                    }
-                    return true
-                }
+                )
+                return true
             }
 
             if (!emittedMediaUrls.add(mediaUrl)) return false
@@ -1519,31 +1571,6 @@ class NartoDramaProvider : MainAPI() {
                 }
             )
             return true
-        }
-
-        // First collect every publicly exposed HTML5 media URL and iframe server.
-        // These become independent links so CloudStream can try another if one fails.
-        for (node in document.select("video[src], video source[src], source[src]")) {
-            val mediaUrl = node.absUrl("src")
-            if (!mediaUrl.startsWith("http")) continue
-            val type = when {
-                mediaUrl.contains(".m3u8", true) || node.attr("type").contains("mpegurl", true) ->
-                    ExtractorLinkType.M3U8
-                mediaUrl.contains(".mpd", true) || node.attr("type").contains("dash", true) ->
-                    ExtractorLinkType.DASH
-                else -> ExtractorLinkType.VIDEO
-            }
-            if (emitMediaLink(mediaUrl, "$name HTML5", type)) {
-                found = true
-            }
-        }
-
-        for (frame in document.select("iframe[src]")) {
-            val embedUrl = frame.absUrl("src")
-            if (!embedUrl.startsWith("http")) continue
-            if (loadExtractor(embedUrl, data, subtitleCallback, callback)) {
-                found = true
-            }
         }
 
         // Try the site's supported refresh-source routes in order. Some episodes need a
@@ -1617,6 +1644,8 @@ class NartoDramaProvider : MainAPI() {
         payload?.optString("play_url")?.takeIf { it.startsWith("http", true) }
             ?.let { candidates["Narto Drama Fallback"] = it }
 
+        // Prefer the refresh-source URL and expose one source; HLS master playlists
+        // retain their own adaptive quality levels for the player selector.
         for ((label, mediaUrl) in candidates) {
             val type = when {
                 mediaUrl.contains(".m3u8", true) ||
@@ -1626,8 +1655,48 @@ class NartoDramaProvider : MainAPI() {
                 else -> ExtractorLinkType.VIDEO
             }
             if (emitMediaLink(mediaUrl, label, type)) {
-                    found = true
+                found = true
+                break
+            }
+        }
+
+        // Use visible HTML5 media only when the preferred refresh source was unavailable.
+        if (!found) {
+            for (node in document.select("video[src], video source[src], source[src]")) {
+                val mediaUrl = node.absUrl("src")
+                if (!mediaUrl.startsWith("http")) continue
+                val type = when {
+                    mediaUrl.contains(".m3u8", true) || node.attr("type").contains("mpegurl", true) ->
+                        ExtractorLinkType.M3U8
+                    mediaUrl.contains(".mpd", true) || node.attr("type").contains("dash", true) ->
+                        ExtractorLinkType.DASH
+                    else -> ExtractorLinkType.VIDEO
                 }
+                if (emitMediaLink(mediaUrl, "$name HTML5", type)) {
+                    found = true
+                    break
+                }
+            }
+        }
+
+        // Last server fallback: try embeds one by one and forward only their first link.
+        if (!found) {
+            for (frame in document.select("iframe[src]")) {
+                val embedUrl = frame.absUrl("src")
+                if (!embedUrl.startsWith("http")) continue
+                var emittedByThisExtractor = false
+                val singleLinkCallback: (ExtractorLink) -> Unit = { link ->
+                    if (!emittedByThisExtractor) {
+                        callback(link)
+                        emittedByThisExtractor = true
+                    }
+                }
+                val extracted = loadExtractor(embedUrl, data, subtitleCallback, singleLinkCallback)
+                if (extracted && emittedByThisExtractor) {
+                    found = true
+                    break
+                }
+            }
         }
 
         // Last fallback: some pages embed episode sources in their episodeItemsRaw JSON.
@@ -1665,6 +1734,7 @@ class NartoDramaProvider : MainAPI() {
                 }
                 if (emitMediaLink(mediaUrl, label, type)) {
                     found = true
+                    break
                 }
             }
 
