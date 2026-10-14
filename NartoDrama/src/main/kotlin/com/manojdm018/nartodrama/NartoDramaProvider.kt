@@ -865,6 +865,15 @@ class NartoDramaProvider : MainAPI() {
             }
         }
 
+        // Keep the requested trope first whenever matching dramas are available.
+        val familyThoughtsIndex = cleanedRows.indexOfFirst {
+            it.name.equals("Reborn: Family Hears His Thoughts", ignoreCase = true)
+        }
+        if (familyThoughtsIndex > 0) {
+            val featuredRow = cleanedRows.removeAt(familyThoughtsIndex)
+            cleanedRows.add(0, featuredRow)
+        }
+
         return cleanedRows
     }
 
