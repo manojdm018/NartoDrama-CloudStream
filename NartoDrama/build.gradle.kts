@@ -1,4 +1,4 @@
-version = 27
+version = 28
 
 cloudstream {
     description = "Search and browse public Narto Drama listings"
