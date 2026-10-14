@@ -275,7 +275,7 @@ class NartoDramaProvider : MainAPI() {
         return results
     }
 
-    private fun filterOriginalRows(rows: List<HomePageList>) {
+    private fun filterOriginalRows(rows: List<HomePageList>): List<HomePageList> {
         val allOriginals = rows.flatMap { it.list }
             .filterNot { isDubbedTitle(it.name) }
         val originalsByTitle = allOriginals
