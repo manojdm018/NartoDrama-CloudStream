@@ -266,7 +266,10 @@ class NartoDramaProvider : MainAPI() {
         return null
     }
 
-    private suspend fun replaceHomeDubbedWithOriginals(rows: List<HomePageList>): List<HomePageList> {
+    private suspend fun replaceHomeDubbedWithOriginals(
+        rows: List<HomePageList>,
+        allowNetworkLookups: Boolean = true
+    ): List<HomePageList> {
         val allItems = rows.flatMap { it.list }.distinctBy { it.url }
         val originalsByTitle = allItems
             .filterNot { isDubbedTitle(it.name) }
@@ -278,12 +281,18 @@ class NartoDramaProvider : MainAPI() {
         // If the counterpart isn't already in another home row, query Narto
         // search for a title-exact original. Limit lookups so one home refresh
         // doesn't issue an unbounded number of extra requests.
-        val missingCounterparts = allItems
-            .filter { isDubbedTitle(it.name) }
-            .distinctBy { audioTitleKey(it.name) }
-            .filter { audioTitleKey(it.name).isNotBlank() &&
-                !originalsByTitle.containsKey(audioTitleKey(it.name)) }
-            .take(2)
+        val missingCounterparts = if (allowNetworkLookups) {
+            allItems
+                .filter { isDubbedTitle(it.name) }
+                .distinctBy { audioTitleKey(it.name) }
+                .filter { audioTitleKey(it.name).isNotBlank() &&
+                    !originalsByTitle.containsKey(audioTitleKey(it.name)) }
+                .take(2)
+        } else {
+            // Avoid serial search requests during the first home-page load.
+            // Exact originals already present in fetched rows can still replace dubs.
+            emptyList()
+        }
 
         for (dubbed in missingCounterparts) {
             val key = audioTitleKey(dubbed.name)
@@ -643,9 +652,10 @@ class NartoDramaProvider : MainAPI() {
         val ranked = candidates.values.sortedByDescending { it.second }.take(20).map { it.first }
         return ranked.takeIf { it.isNotEmpty() }?.let { HomePageList("Recommended for You", it) }
     }
-    private val maxSynopsisItemsPerHome = 100
-    // Detail-page reads are cached and accumulated on later visits to avoid one huge refresh.
-    private val maxNewSynopsisReadsPerHome = 8
+    private val maxSynopsisItemsPerHome = 80
+    // Keep first-load classification cheap; successful detail reads are cached.
+    // One new detail request per refresh gradually enriches categories.
+    private val maxNewSynopsisReadsPerHome = 1
 
     private fun extractRelatedTags(document: Document): List<String> {
         val output = linkedSetOf<String>()
@@ -824,11 +834,9 @@ class NartoDramaProvider : MainAPI() {
 
         if (candidates.isEmpty()) return rows
 
-        // Read individual drama detail pages sequentially. The provider template
-        // doesn't include kotlinx-coroutines as a direct dependency, so don't use
-        // async/awaitAll here. Cache successful reads and inspect up to 40 new
-        // titles per refresh, choosing uninspected URLs so repeated home visits
-        // progressively classify the full 120-title candidate pool.
+        // Read individual drama detail pages sequentially and sparingly.
+        // Cache successful reads so later refreshes progressively classify titles
+        // without making the first homepage load wait on many detail requests.
         val pendingReads = synchronized(synopsisDetailCache) {
             candidates.filter { item ->
                 !synopsisDetailCache.containsKey(item.url) &&
@@ -1017,7 +1025,10 @@ class NartoDramaProvider : MainAPI() {
             }
             else -> fetchHomeRows(page)
         }
-        val visibleRows = replaceHomeDubbedWithOriginals(rows)
+        val visibleRows = replaceHomeDubbedWithOriginals(
+            rows,
+            allowNetworkLookups = key != "home"
+        )
         val classifiedRows = if (key == "home" || key == "stories") {
             categorizeHomeFromSynopses(visibleRows)
         } else {
@@ -1105,10 +1116,7 @@ class NartoDramaProvider : MainAPI() {
         for ((slug, title) in listOf(
             "rebirth" to "Reborn & Rebirth",
             "time-travel" to "Time Travel",
-            "revenge" to "Revenge",
-            "hidden-identity" to "Hidden Identity",
-            "zero-to-hero" to "Zero to Hero",
-            "second-chance" to "Second Chance"
+            "revenge" to "Revenge"
         )) {
             val results = fetchCatalogPage("/tag/" + slug, page, "en-US")
             if (results.isNotEmpty()) rows.add(HomePageList(title, results))
@@ -1116,8 +1124,7 @@ class NartoDramaProvider : MainAPI() {
 
         for ((slug, title) in listOf(
             "action" to "Action",
-            "fantasy" to "Fantasy",
-            "comedy" to "Comedy"
+            "fantasy" to "Fantasy"
         )) {
             val results = fetchCatalogPage("/genre/" + slug, page, "en-US")
             if (results.isNotEmpty()) rows.add(HomePageList(title, results))
