@@ -996,9 +996,27 @@ class NartoDramaProvider : MainAPI() {
 
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val key = request.data.substringAfter("csbrowse=", "").substringBefore("&")
+        // CloudStream may pass the original main-page URL, an encoded URL, or only
+        // the selected page label as request.data. Normalize these forms so the
+        // For You tab reliably routes to the curated homepage.
+        val decodedRequestData = runCatching {
+            URLDecoder.decode(request.data, "UTF-8")
+        }.getOrDefault(request.data)
+        val rawBrowseKey = decodedRequestData.substringAfter("csbrowse=", "")
+            .substringBefore("&")
+            .substringBefore("#")
+        val key = rawBrowseKey
             .let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }
-            .ifBlank { "provider:anyreel" }
+            .ifBlank {
+                when (request.name.trim().lowercase(Locale.ROOT)) {
+                    "for you", "home", "popular" -> "home"
+                    "story types", "stories" -> "stories"
+                    "genres", "genre" -> "genres"
+                    "languages", "language" -> "languages"
+                    "sources", "source apps" -> "sources"
+                    else -> "provider:anyreel"
+                }
+            }
         val rows = when {
             key == "home" -> fetchHomeRows(page)
             key == "stories" -> fetchStoryRows(page)
