@@ -1,0 +1,20 @@
+[
+    {
+        "fileHash": "sha256-9457ec6fcbd081c780fbf9bf338e0b188f9c919c7723a05568e99fd194ee89e0",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/manojdm018/NartoDrama-CloudStream",
+        "fileSize": 26807,
+        "status": 3,
+        "authors": [
+            "manojdm018"
+        ],
+        "tvTypes": [
+            "TvSeries"
+        ],
+        "version": 2,
+        "internalName": "DramaFren",
+        "description": "Search and browse public DramaFren short-drama listings",
+        "url": "https://raw.githubusercontent.com/manojdm018/NartoDrama-CloudStream/dramafren-builds/DramaFren.cs3",
+        "name": "DramaFren"
+    }
+]

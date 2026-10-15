@@ -1,0 +1,8 @@
+{
+  "name": "DramaFren",
+  "description": "Independent CloudStream extension for DramaFren",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/manojdm018/NartoDrama-CloudStream/dramafren-builds/plugins.json"
+  ]
+}
