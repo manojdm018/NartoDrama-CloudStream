@@ -593,6 +593,56 @@ class NartoDramaProvider : MainAPI() {
     private val synopsisDetailCache = mutableMapOf<String, SynopsisDetails>()
     private val originalAudioLanguageByUrl = mutableMapOf<String, String>()
     private val synopsisAttempted = mutableSetOf<String>()
+
+    // Learn from detail-page opens without adding network requests to home refreshes.
+    // Playback completion/progress is not exposed as a reliable signal to this provider.
+    private val recommendationLock = Any()
+    private val openedDramaUrls = linkedSetOf<String>()
+    private val storyPreferenceScores = linkedMapOf<String, Int>()
+    private val maxTrackedOpens = 200
+
+    private fun recordDramaOpen(title: String, url: String, metadata: String) {
+        if (url.isBlank() || title.isBlank()) return
+        synchronized(recommendationLock) {
+            if (!openedDramaUrls.add(url)) return
+            while (openedDramaUrls.size > maxTrackedOpens) {
+                openedDramaUrls.remove(openedDramaUrls.first())
+            }
+            val signals = "$title $metadata".lowercase(Locale.ROOT)
+            val categories = inferredCategories(title, metadata).toMutableSet()
+            for ((slug, label) in tagChoices) {
+                if (signals.contains(slug.replace('-', ' ')) ||
+                    signals.contains(label.lowercase(Locale.ROOT))) {
+                    categories.add(label)
+                }
+            }
+            for (category in categories) {
+                storyPreferenceScores[category] = (storyPreferenceScores[category] ?: 0) + 1
+            }
+        }
+    }
+
+    private fun personalizedRecommendationRow(rows: List<HomePageList>): HomePageList? {
+        val preferences = synchronized(recommendationLock) { storyPreferenceScores.toMap() }
+        if (preferences.isEmpty()) return null
+        val watched = synchronized(recommendationLock) { openedDramaUrls.toSet() }
+        val candidates = linkedMapOf<String, Pair<SearchResponse, Int>>()
+        for (row in rows) {
+            for (item in row.list) {
+                if (item.url in watched || isDubbedTitle(item.name) || !hasUsablePoster(item)) continue
+                val inferred = inferredCategories(item.name, item.name).toSet()
+                var score = inferred.sumOf { preferences[it] ?: 0 }
+                // A matching category row is useful when a title is too short to
+                // reveal its trope by itself.
+                if (preferences.containsKey(row.name)) score += preferences[row.name] ?: 0
+                if (score <= 0) continue
+                val current = candidates[item.url]
+                if (current == null || score > current.second) candidates[item.url] = item to score
+            }
+        }
+        val ranked = candidates.values.sortedByDescending { it.second }.take(20).map { it.first }
+        return ranked.takeIf { it.isNotEmpty() }?.let { HomePageList("Recommended for You", it) }
+    }
     private val maxSynopsisItemsPerHome = 100
     // Detail-page reads are cached and accumulated on later visits to avoid one huge refresh.
     private val maxNewSynopsisReadsPerHome = 8
@@ -973,7 +1023,13 @@ class NartoDramaProvider : MainAPI() {
         } else {
             visibleRows
         }
-        val finalRows = mergeHomeRows(classifiedRows)
+        val finalRows = mergeHomeRows(classifiedRows).toMutableList()
+        if (key == "home" && page == 1) {
+            personalizedRecommendationRow(finalRows)?.let { recommendation ->
+                finalRows.removeAll { it.name.equals(recommendation.name, ignoreCase = true) }
+                finalRows.add(0, recommendation)
+            }
+        }
         return newHomePageResponse(finalRows, hasNext = finalRows.isNotEmpty())
     }
 
@@ -1510,6 +1566,9 @@ class NartoDramaProvider : MainAPI() {
         val plot = bestSynopsis(document)
             ?.takeIf { it.length >= 60 }
             ?: fallbackPlot
+
+        // Opening a detail page is the reliable interaction signal available here.
+        recordDramaOpen(title, resolvedUrl, "$exclusionMetadata $plot " + extractRelatedTags(document).joinToString(" "))
 
         val route = episodePath.find(resolvedUrl) ?: episodePath.find(url)
         val slug = route?.groupValues?.getOrNull(1) ?: return null
