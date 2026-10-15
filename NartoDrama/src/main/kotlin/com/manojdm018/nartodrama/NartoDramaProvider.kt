@@ -283,7 +283,7 @@ class NartoDramaProvider : MainAPI() {
             .distinctBy { audioTitleKey(it.name) }
             .filter { audioTitleKey(it.name).isNotBlank() &&
                 !originalsByTitle.containsKey(audioTitleKey(it.name)) }
-            .take(16)
+            .take(2)
 
         for (dubbed in missingCounterparts) {
             val key = audioTitleKey(dubbed.name)
@@ -593,9 +593,9 @@ class NartoDramaProvider : MainAPI() {
     private val synopsisDetailCache = mutableMapOf<String, SynopsisDetails>()
     private val originalAudioLanguageByUrl = mutableMapOf<String, String>()
     private val synopsisAttempted = mutableSetOf<String>()
-    private val maxSynopsisItemsPerHome = 240
+    private val maxSynopsisItemsPerHome = 100
     // Detail-page reads are cached and accumulated on later visits to avoid one huge refresh.
-    private val maxNewSynopsisReadsPerHome = 50
+    private val maxNewSynopsisReadsPerHome = 8
 
     private fun extractRelatedTags(document: Document): List<String> {
         val output = linkedSetOf<String>()
@@ -1026,67 +1026,43 @@ class NartoDramaProvider : MainAPI() {
     private suspend fun fetchHomeRows(page: Int): List<HomePageList> {
         val rows = mutableListOf<HomePageList>()
 
-        // English Shorts includes only source records that explicitly identify English
-        // as the original/audio language. UI locale and English subtitles do not qualify.
-        val englishOriginals = fetchEnglishOriginalShorts(page)
-        if (englishOriginals.isNotEmpty()) {
-            rows.add(HomePageList("English Shorts", englishOriginals))
-        }
-
-        // Prefer Narto's un-targeted provider feed, then merge in cards from its
-        // server-rendered Hot catalogue. These cards contain actual drama-detail URLs,
-        // poster URLs and tag chips even if the provider JSON shape changes.
+        // Keep the initial home refresh lightweight: don't scan ten provider feeds
+        // just to build English Shorts, and don't request every tag/genre page here.
+        // The dedicated Story Types, Genres, Languages and source pages still expose
+        // the full catalogue; the home page shows a curated, faster subset.
         rows.addAll(fetchProviderSections("anyreel", page, "en-US", "Popular", includeMetadataCategoryRows = true))
-        // Mix in other original-release catalogues so inferred story rows have broader coverage.
-        for (provider in listOf("dramabox", "reelshort", "netshort", "goodshort", "shortmax", "moboreels", "dramawave")) {
+        for (provider in listOf("dramabox", "reelshort", "shortmax")) {
             val label = providerChoices.firstOrNull { it.first == provider }?.second ?: provider
             rows.addAll(fetchProviderSections(provider, page, "en-US", "$label Originals"))
         }
-        val baseFeeds = listOf(
+
+        for ((path, rowName) in listOf(
             "/tag/hot" to "Popular Originals",
-            "/tag/new" to "New Originals",
-            "/tag/popular" to "Popular This Week",
-            "/featured" to "Featured Originals"
-        )
-        for ((path, rowName) in baseFeeds) {
+            "/tag/new" to "New Originals"
+        )) {
             val results = fetchCatalogPage(path, page, "en-US")
             if (results.isNotEmpty()) rows.add(HomePageList(rowName, results))
         }
 
-        val storyRows = listOf(
+        // Keep the most useful story rows on the landing page. The Story Types
+        // browser remains the place to access every supported tag.
+        for ((slug, title) in listOf(
             "rebirth" to "Reborn & Rebirth",
             "time-travel" to "Time Travel",
             "revenge" to "Revenge",
             "hidden-identity" to "Hidden Identity",
             "zero-to-hero" to "Zero to Hero",
-            "second-chance" to "Second Chance",
-            "counterattack" to "Counterattack",
-            "underdog-rise" to "Underdog Rise",
-            "system" to "System & Superpowers",
-            "ceo" to "CEO & Billionaire",
-            "billionaire" to "Billionaire",
-            "karma-payback" to "Karma Payback",
-            "werewolf" to "Werewolf",
-            "ancient" to "Ancient / Costume"
-        )
-        for ((slug, title) in storyRows) {
+            "second-chance" to "Second Chance"
+        )) {
             val results = fetchCatalogPage("/tag/" + slug, page, "en-US")
             if (results.isNotEmpty()) rows.add(HomePageList(title, results))
         }
 
-        val genreRows = listOf(
-            "romance" to "Romance",
-            "fantasy" to "Fantasy",
+        for ((slug, title) in listOf(
             "action" to "Action",
-            "comedy" to "Comedy",
-            "thriller" to "Thriller",
-            "mystery" to "Mystery",
-            "crime" to "Crime",
-            "adventure" to "Adventure",
-            "sci-fi" to "Sci-Fi",
-            "family" to "Family"
-        )
-        for ((slug, title) in genreRows) {
+            "fantasy" to "Fantasy",
+            "comedy" to "Comedy"
+        )) {
             val results = fetchCatalogPage("/genre/" + slug, page, "en-US")
             if (results.isNotEmpty()) rows.add(HomePageList(title, results))
         }
