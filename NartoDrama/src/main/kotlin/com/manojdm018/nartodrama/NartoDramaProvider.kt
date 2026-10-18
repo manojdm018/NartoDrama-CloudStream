@@ -10,6 +10,12 @@ import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class NartoDramaProvider : MainAPI() {
     override var mainUrl = "https://nartodrama.com"
@@ -600,6 +606,15 @@ class NartoDramaProvider : MainAPI() {
     )
 
     private val synopsisDetailCache = mutableMapOf<String, SynopsisDetails>()
+
+    // Stale-while-revalidate homepage cache: return the last good page immediately,
+    // then refresh it off the CloudStream UI request path.
+    private val homeCacheLock = Any()
+    private val homeRefreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var cachedHomeRows: List<HomePageList>? = null
+    private var cachedHomeAt: Long = 0L
+    private var homeRefreshJob: Job? = null
+    private val homeCacheTtlMs = 5 * 60 * 1000L
     private val originalAudioLanguageByUrl = mutableMapOf<String, String>()
     private val synopsisAttempted = mutableSetOf<String>()
 
@@ -837,16 +852,8 @@ class NartoDramaProvider : MainAPI() {
         // Read individual drama detail pages sequentially and sparingly.
         // Cache successful reads so later refreshes progressively classify titles
         // without making the first homepage load wait on many detail requests.
-        val pendingReads = synchronized(synopsisDetailCache) {
-            candidates.filter { item ->
-                !synopsisDetailCache.containsKey(item.url) &&
-                    !synopsisAttempted.contains(item.url)
-            }.take(maxNewSynopsisReadsPerHome)
-        }
-        for (item in pendingReads) {
-            runCatching { inspectDramaSynopsis(item) }
-        }
-
+        // Never fetch detail pages while CloudStream is waiting for the homepage.
+        // Classification uses already-cached synopsis data and listing metadata only.
         val inspected = linkedMapOf<String, Pair<SearchResponse, SynopsisDetails?>>()
         for (item in candidates) {
             val details = synchronized(synopsisDetailCache) {
@@ -1017,6 +1024,15 @@ class NartoDramaProvider : MainAPI() {
                     else -> "provider:anyreel"
                 }
             }
+        if (key == "home" && page == 1) {
+            val cached = synchronized(homeCacheLock) { cachedHomeRows }
+            if (cached != null) {
+                val stale = System.currentTimeMillis() - synchronized(homeCacheLock) { cachedHomeAt } >= homeCacheTtlMs
+                if (stale) scheduleHomeRefresh()
+                return newHomePageResponse(cached, hasNext = cached.isNotEmpty())
+            }
+        }
+
         val rows = when {
             key == "home" -> fetchHomeRows(page)
             key == "stories" -> fetchStoryRows(page)
@@ -1058,8 +1074,46 @@ class NartoDramaProvider : MainAPI() {
                 finalRows.removeAll { it.name.equals(recommendation.name, ignoreCase = true) }
                 finalRows.add(0, recommendation)
             }
+            val snapshot = finalRows.toList()
+            synchronized(homeCacheLock) {
+                cachedHomeRows = snapshot
+                cachedHomeAt = System.currentTimeMillis()
+            }
         }
         return newHomePageResponse(finalRows, hasNext = finalRows.isNotEmpty())
+    }
+
+    private fun scheduleHomeRefresh() {
+        synchronized(homeCacheLock) {
+            if (homeRefreshJob?.isActive == true) return
+            homeRefreshJob = homeRefreshScope.launch {
+                try {
+                    val fresh = buildCachedHomeRows()
+                    if (fresh.isNotEmpty()) {
+                        synchronized(homeCacheLock) {
+                            cachedHomeRows = fresh
+                            cachedHomeAt = System.currentTimeMillis()
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Keep the last known-good homepage if refresh fails.
+                } finally {
+                    synchronized(homeCacheLock) { homeRefreshJob = null }
+                }
+            }
+        }
+    }
+
+    private suspend fun buildCachedHomeRows(): List<HomePageList> {
+        val rows = fetchHomeRows(1)
+        val visible = replaceHomeDubbedWithOriginals(rows, allowNetworkLookups = false)
+        val classified = categorizeHomeFromSynopses(visible)
+        val finalRows = mergeHomeRows(classified).toMutableList()
+        personalizedRecommendationRow(finalRows)?.let { recommendation ->
+            finalRows.removeAll { it.name.equals(recommendation.name, ignoreCase = true) }
+            finalRows.add(0, recommendation)
+        }
+        return finalRows.toList()
     }
 
     private suspend fun fetchEnglishOriginalShorts(page: Int): List<SearchResponse> {
@@ -1192,9 +1246,11 @@ class NartoDramaProvider : MainAPI() {
         val separator = if (path.contains("?")) "&" else "?"
         val url = mainUrl + path + separator +
             "lang=" + URLEncoder.encode(locale, "UTF-8") + "&page=" + page
-        val document = runCatching {
-            app.get(url, headers = requestHeaders(mainUrl + "/")).document
-        }.getOrNull() ?: return emptyList()
+        val document = withTimeoutOrNull(2200L) {
+            runCatching {
+                app.get(url, headers = requestHeaders(mainUrl + "/")).document
+            }.getOrNull()
+        } ?: return emptyList()
 
         return deduplicateResults(parseCards(document) + parseJsonLdCards(document))
     }
@@ -1235,7 +1291,9 @@ class NartoDramaProvider : MainAPI() {
             params.add("tab_pages[" + URLEncoder.encode(tab, "UTF-8") + "]=" + targetPage)
         }
         val url = mainUrl + "/home/providers/sections?" + params.joinToString("&")
-        val body = runCatching { app.get(url, headers = requestHeaders()).text }.getOrNull() ?: return null
+        val body = withTimeoutOrNull(2200L) {
+            runCatching { app.get(url, headers = requestHeaders()).text }.getOrNull()
+        } ?: return null
         return runCatching { JSONObject(body) }.getOrNull()
     }
 
