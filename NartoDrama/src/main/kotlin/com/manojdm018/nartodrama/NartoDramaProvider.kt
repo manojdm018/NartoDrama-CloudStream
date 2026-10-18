@@ -1073,9 +1073,23 @@ class NartoDramaProvider : MainAPI() {
             }
             else -> fetchHomeRows(page)
         }
+        // Fast path: homepage must only parse the single provider response.
+        // Skip synopsis categorization, cross-row de-duplication, personalization,
+        // and counterpart lookups here; those are optional and can delay first paint.
+        if (key == "home") {
+            val homeRows = rows.filter { it.list.isNotEmpty() }
+            if (page == 1 && homeRows.isNotEmpty()) {
+                synchronized(homeCacheLock) {
+                    cachedHomeRows = homeRows.toList()
+                    cachedHomeAt = System.currentTimeMillis()
+                }
+            }
+            return newHomePageResponse(homeRows, hasNext = homeRows.isNotEmpty())
+        }
+
         val visibleRows = replaceHomeDubbedWithOriginals(
             rows,
-            allowNetworkLookups = key != "home"
+            allowNetworkLookups = true
         )
         val classifiedRows = if (key == "home" || key == "stories") {
             categorizeHomeFromSynopses(visibleRows)
@@ -1185,7 +1199,7 @@ class NartoDramaProvider : MainAPI() {
             page,
             "en-US",
             "Popular",
-            includeMetadataCategoryRows = true
+            includeMetadataCategoryRows = false
         )
     }
 
