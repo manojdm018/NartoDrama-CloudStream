@@ -1005,7 +1005,18 @@ class NartoDramaProvider : MainAPI() {
     private val streamApiBase = "https://edge.narto-drama.com"
 
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+    // Hard deadline for the entire homepage pipeline, not just individual HTTP calls.
+    // Some underlying HTTP operations may not respect the inner timeout promptly.
+    // Always return control to CloudStream even if the source or post-processing stalls.
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? =
+        try {
+            withTimeoutOrNull(3500L) { getMainPageInternal(page, request) }
+                ?: newHomePageResponse(emptyList(), hasNext = false)
+        } catch (_: Exception) {
+            newHomePageResponse(emptyList(), hasNext = false)
+        }
+
+    private suspend fun getMainPageInternal(page: Int, request: MainPageRequest): HomePageResponse? {
         // CloudStream may pass the original main-page URL, an encoded URL, or only
         // the selected page label as request.data. Normalize these forms so the
         // For You tab reliably routes to the curated homepage.
