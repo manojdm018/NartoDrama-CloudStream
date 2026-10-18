@@ -1,4 +1,8 @@
-version = 35
+version = 36
+
+dependencies {
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+}
 
 cloudstream {
     description = "Search and browse public Narto Drama listings"
