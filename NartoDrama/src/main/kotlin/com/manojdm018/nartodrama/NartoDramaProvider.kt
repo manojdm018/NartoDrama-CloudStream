@@ -1246,11 +1246,11 @@ class NartoDramaProvider : MainAPI() {
         val separator = if (path.contains("?")) "&" else "?"
         val url = mainUrl + path + separator +
             "lang=" + URLEncoder.encode(locale, "UTF-8") + "&page=" + page
-        val document = withTimeoutOrNull(2200L) {
-            runCatching {
+        val document = runCatching {
+            withTimeoutOrNull(2200L) {
                 app.get(url, headers = requestHeaders(mainUrl + "/")).document
-            }.getOrNull()
-        } ?: return emptyList()
+            }
+        }.getOrNull() ?: return emptyList()
 
         return deduplicateResults(parseCards(document) + parseJsonLdCards(document))
     }
@@ -1291,9 +1291,11 @@ class NartoDramaProvider : MainAPI() {
             params.add("tab_pages[" + URLEncoder.encode(tab, "UTF-8") + "]=" + targetPage)
         }
         val url = mainUrl + "/home/providers/sections?" + params.joinToString("&")
-        val body = withTimeoutOrNull(2200L) {
-            runCatching { app.get(url, headers = requestHeaders()).text }.getOrNull()
-        } ?: return null
+        val body = runCatching {
+            withTimeoutOrNull(2200L) {
+                app.get(url, headers = requestHeaders()).text
+            }
+        }.getOrNull() ?: return null
         return runCatching { JSONObject(body) }.getOrNull()
     }
 
