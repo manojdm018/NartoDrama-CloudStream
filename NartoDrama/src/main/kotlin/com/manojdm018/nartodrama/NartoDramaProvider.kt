@@ -1109,43 +1109,27 @@ class NartoDramaProvider : MainAPI() {
     }
 
     private suspend fun fetchHomeRows(page: Int): List<HomePageList> {
-        val rows = mutableListOf<HomePageList>()
+        // Keep the first screen fast: one provider request normally supplies the
+        // landing rows and metadata-based story categories. The dedicated Story
+        // Types, Genres, Languages and Sources pages still expose the wider catalog.
+        val rows = fetchProviderSections(
+            "anyreel",
+            page,
+            "en-US",
+            "Popular",
+            includeMetadataCategoryRows = true
+        ).toMutableList()
 
-        // Keep the initial home refresh lightweight: don't scan ten provider feeds
-        // just to build English Shorts, and don't request every tag/genre page here.
-        // The dedicated Story Types, Genres, Languages and source pages still expose
-        // the full catalogue; the home page shows a curated, faster subset.
-        rows.addAll(fetchProviderSections("anyreel", page, "en-US", "Popular", includeMetadataCategoryRows = true))
-        for (provider in listOf("dramabox", "reelshort", "shortmax")) {
-            val label = providerChoices.firstOrNull { it.first == provider }?.second ?: provider
-            rows.addAll(fetchProviderSections(provider, page, "en-US", "$label Originals"))
-        }
-
-        for ((path, rowName) in listOf(
-            "/tag/hot" to "Popular Originals",
-            "/tag/new" to "New Originals"
-        )) {
-            val results = fetchCatalogPage(path, page, "en-US")
-            if (results.isNotEmpty()) rows.add(HomePageList(rowName, results))
-        }
-
-        // Keep the most useful story rows on the landing page. The Story Types
-        // browser remains the place to access every supported tag.
-        for ((slug, title) in listOf(
-            "rebirth" to "Reborn & Rebirth",
-            "time-travel" to "Time Travel",
-            "revenge" to "Revenge"
-        )) {
-            val results = fetchCatalogPage("/tag/" + slug, page, "en-US")
-            if (results.isNotEmpty()) rows.add(HomePageList(title, results))
-        }
-
-        for ((slug, title) in listOf(
-            "action" to "Action",
-            "fantasy" to "Fantasy"
-        )) {
-            val results = fetchCatalogPage("/genre/" + slug, page, "en-US")
-            if (results.isNotEmpty()) rows.add(HomePageList(title, results))
+        // If the API feed is unavailable or has no usable posters, fall back to
+        // one ordinary catalog page instead of returning a blank homepage.
+        val hasUsableItems = rows.asSequence()
+            .flatMap { it.list.asSequence() }
+            .any { hasUsablePoster(it) && !isDubbedTitle(it.name) }
+        if (!hasUsableItems) {
+            val fallback = fetchCatalogPage("/tag/hot", page, "en-US")
+            if (fallback.isNotEmpty()) {
+                rows.add(HomePageList("Popular Originals", fallback))
+            }
         }
 
         return rows
