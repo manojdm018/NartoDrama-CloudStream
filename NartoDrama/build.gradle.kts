@@ -1,4 +1,4 @@
-version = 37
+version = 38
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
