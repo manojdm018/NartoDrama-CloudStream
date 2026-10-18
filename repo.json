@@ -1,0 +1,8 @@
+{
+  "name": "Narto Drama",
+  "description": "CloudStream extension for Narto Drama",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/manojdm018/NartoDrama-CloudStream/builds/plugins.json"
+  ]
+}

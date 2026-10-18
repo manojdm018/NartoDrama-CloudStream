@@ -1,0 +1,20 @@
+[
+    {
+        "fileHash": "sha256-4cc2b66f915f474ccd8f36b84df2ba327adb82899f9a102fc85744cab244ffb4",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/manojdm018/NartoDrama-CloudStream",
+        "fileSize": 92431,
+        "status": 3,
+        "authors": [
+            "manojdm018"
+        ],
+        "tvTypes": [
+            "TvSeries"
+        ],
+        "version": 40,
+        "internalName": "NartoDrama",
+        "description": "Search and browse public Narto Drama listings",
+        "url": "https://raw.githubusercontent.com/manojdm018/NartoDrama-CloudStream/builds/NartoDrama.cs3",
+        "name": "NartoDrama"
+    }
+]
