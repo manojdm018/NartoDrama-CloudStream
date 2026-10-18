@@ -12,6 +12,13 @@ on:
 permissions:
   contents: write
 
+# Prevent overlapping pushes from racing while publishing the builds and
+# dramafren-builds branches. Keep the newest queued run rather than cancelling
+# an in-progress publish.
+concurrency:
+  group: nartodrama-publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
