@@ -1010,7 +1010,7 @@ class NartoDramaProvider : MainAPI() {
     // Always return control to CloudStream even if the source or post-processing stalls.
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? =
         try {
-            withTimeoutOrNull(3500L) { getMainPageInternal(page, request) }
+            withTimeoutOrNull(7500L) { getMainPageInternal(page, request) }
                 ?: newHomePageResponse(emptyList(), hasNext = false)
         } catch (_: Exception) {
             newHomePageResponse(emptyList(), hasNext = false)
@@ -1191,16 +1191,28 @@ class NartoDramaProvider : MainAPI() {
     }
 
     private suspend fun fetchHomeRows(page: Int): List<HomePageList> {
-        // Startup must make exactly one bounded request. Do not chain a second
-        // catalog request when the provider feed is slow or unavailable: an empty
-        // page is recoverable, but a startup spinner that never ends is not.
-        return fetchProviderSections(
+        // First try the fast provider API. If it is unavailable or returns no
+        // usable cards, fall back to the public HTML homepage so the extension
+        // does not render a completely blank page when only the API is failing.
+        val apiRows = fetchProviderSections(
             "anyreel",
             page,
             "en-US",
             "Popular",
             includeMetadataCategoryRows = false
-        )
+        ).filter { it.list.isNotEmpty() }
+        if (apiRows.isNotEmpty()) return apiRows
+
+        val url = mainUrl + "/?lang=en-US&page=" + page
+        val document = runCatching {
+            withTimeoutOrNull(4500L) {
+                app.get(url, headers = requestHeaders(mainUrl + "/")).document
+            }
+        }.getOrNull() ?: return emptyList()
+
+        val results = deduplicateResults(parseCards(document) + parseJsonLdCards(document))
+        if (results.isEmpty()) return emptyList()
+        return listOf(HomePageList("Popular", results))
     }
 
     private suspend fun fetchStoryRows(page: Int): List<HomePageList> {
