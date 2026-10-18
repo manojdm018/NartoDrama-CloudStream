@@ -134,7 +134,10 @@ class NartoDramaProvider : MainAPI() {
         ("$mainUrl/?csbrowse=genres") to "Genres",
         ("$mainUrl/?csbrowse=languages") to "Languages"
     )
-    override val mainPage = mainPageOf(*browsePages.toTypedArray())
+    // Keep startup to a single page. CloudStream may request main-page tabs during
+    // provider initialization; the old four-tab setup could trigger dozens of
+    // sequential catalogue requests before the extension became usable.
+    override val mainPage = mainPageOf("$mainUrl/?csbrowse=home" to "For You")
 
     private val episodePath = Regex("""/detail/watch/([^/?]+)/?(\d+)?""")
     private val blPattern = Regex(
@@ -1163,30 +1166,16 @@ class NartoDramaProvider : MainAPI() {
     }
 
     private suspend fun fetchHomeRows(page: Int): List<HomePageList> {
-        // Keep the first screen fast: one provider request normally supplies the
-        // landing rows and metadata-based story categories. The dedicated Story
-        // Types, Genres, Languages and Sources pages still expose the wider catalog.
-        val rows = fetchProviderSections(
+        // Startup must make exactly one bounded request. Do not chain a second
+        // catalog request when the provider feed is slow or unavailable: an empty
+        // page is recoverable, but a startup spinner that never ends is not.
+        return fetchProviderSections(
             "anyreel",
             page,
             "en-US",
             "Popular",
             includeMetadataCategoryRows = true
-        ).toMutableList()
-
-        // If the API feed is unavailable or has no usable posters, fall back to
-        // one ordinary catalog page instead of returning a blank homepage.
-        val hasUsableItems = rows.asSequence()
-            .flatMap { it.list.asSequence() }
-            .any { hasUsablePoster(it) && !isDubbedTitle(it.name) }
-        if (!hasUsableItems) {
-            val fallback = fetchCatalogPage("/tag/hot", page, "en-US")
-            if (fallback.isNotEmpty()) {
-                rows.add(HomePageList("Popular Originals", fallback))
-            }
-        }
-
-        return rows
+        )
     }
 
     private suspend fun fetchStoryRows(page: Int): List<HomePageList> {
